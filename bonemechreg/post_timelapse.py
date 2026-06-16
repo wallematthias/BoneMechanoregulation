@@ -21,7 +21,13 @@ from bonemechreg.parosol import solve_sed_to_file
 
 def _outputs_complete(outputs: dict[str, Path]) -> bool:
     """Return true when all expected files for a case already exist."""
-    return outputs["sed"].exists() and outputs["summary"].exists() and outputs["csv"].exists() and outputs["curves"].exists()
+    return (
+        outputs["sed"].exists()
+        and outputs["summary"].exists()
+        and outputs["csv"].exists()
+        and outputs["curves"].exists()
+        and outputs["schulte_curves"].exists()
+    )
 
 
 def _assert_same_grid(reference: sitk.Image, candidate: sitk.Image, *, name: str) -> None:
@@ -108,6 +114,8 @@ def _run_case(case: TimelapseCase, profile: str, overwrite: bool, *, verbose: bo
         )
         if verbose:
             print(f"[mechanoregulation] {case.case_id}: wrote {outputs['sed']}")
+    elif verbose:
+        print(f"[mechanoregulation] {case.case_id}: reusing existing baseline SED {outputs['sed']}")
 
     if verbose:
         print(f"[mechanoregulation] {case.case_id}: running surface mechanoregulation analysis")
@@ -121,7 +129,7 @@ def _run_case(case: TimelapseCase, profile: str, overwrite: bool, *, verbose: bo
         return_full=True,
         plot=True,
         work_dir=case.output_dir,
-        run_name=case.remodelling_image_path.name.replace(".nii.gz", ""),
+        run_name=outputs["curves"].name.replace("_conditional_curves.png", ""),
     )
     write_mechanoregulation_summary(
         case=case,
@@ -169,6 +177,8 @@ def run_post_timelapse_mechanoregulation(
     for case in cases:
         outputs = case_outputs(case)
         if not overwrite and _outputs_complete(outputs):
+            if verbose:
+                print(f"[mechanoregulation] {case.case_id}: outputs complete, skipping")
             summary["skipped"] += 1
             continue
         try:

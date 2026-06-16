@@ -77,6 +77,48 @@ def test_run_cases_reuses_existing_sed_when_summary_missing(tmp_path: Path, monk
     assert outputs["csv"].exists()
 
 
+def test_verbose_run_reports_existing_sed_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, case = _make_case_fixture(tmp_path)
+    outputs = case_outputs(case)
+    outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
+    _write_image(outputs["sed"], value=3)
+
+    class FakeResult:
+        orf = 2.0
+        orr = 0.5
+        orf_ci = (1.5, 2.5)
+        orr_ci = (0.25, 0.75)
+        orr_increasing_strain = 0.5
+        orr_decreasing_strain = 2.0
+        orr_increasing_strain_ci = (0.25, 0.75)
+        orr_decreasing_strain_ci = (1.3333333333333333, 4.0)
+        pvalue_form = 0.01
+        pvalue_res = 0.02
+        conditional_curves = {"F": {"mean": [0.1]}, "R": {"mean": [0.2]}, "Q": {"mean": [0.7]}, "support": [0.1]}
+        binned_odds_diagnostics = {}
+        sample_counts = {"n_sampled_voxels": 10}
+        settings = {"profile": "XtremeCTII"}
+        plot_paths = {"conditional_curves": outputs["curves"]}
+
+    def fail_solve(**kwargs):
+        raise AssertionError("existing SED should be reused")
+
+    def fake_mechreg(**kwargs):
+        outputs["curves"].write_bytes(b"plot")
+        return FakeResult()
+
+    monkeypatch.setattr("bonemechreg.post_timelapse.solve_sed_to_file", fail_solve)
+    monkeypatch.setattr("bonemechreg.post_timelapse.mechanoregulation", fake_mechreg)
+
+    run_post_timelapse_mechanoregulation(dataset_root=root, profile="XtremeCTII", verbose=True)
+
+    assert "reusing existing baseline SED" in capsys.readouterr().out
+
+
 def test_run_cases_builds_material_labels_from_native_baseline_segmentation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -172,6 +214,7 @@ def test_run_cases_skips_complete_outputs(tmp_path: Path, monkeypatch: pytest.Mo
     outputs["summary"].write_text(json.dumps({"ok": True}), encoding="utf-8")
     outputs["csv"].write_text("ok\n", encoding="utf-8")
     outputs["curves"].write_bytes(b"plot")
+    outputs["schulte_curves"].write_bytes(b"plot")
 
     def fail_solve(**kwargs):
         raise AssertionError("solve should not run")

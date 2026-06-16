@@ -145,4 +145,5 @@ def case_outputs(case: TimelapseCase) -> dict[str, Path]:
         "summary": case.output_dir / f"{stem}_mechanoregulation_summary.json",
         "csv": case.output_dir / f"{stem}_mechanoregulation_summary.csv",
         "curves": case.output_dir / f"{stem}_conditional_curves.png",
+        "schulte_curves": case.output_dir / f"{stem}_schulte_binned_curves.png",
     }
