@@ -53,42 +53,60 @@ BoneMechanoregulation can also be installed into Slicer's Python environment so
 the same command-line analysis is available from Slicer-side workflows or
 scripted modules.
 
-From Slicer's Python interactor or a Slicer Python shell:
+First check the Python version shipped with your Slicer build:
 
 ```python
 import sys
-import subprocess
 
-subprocess.check_call([
-    sys.executable,
-    "-m",
-    "pip",
-    "install",
-    "bone-mechanoregulation",
-])
+print(sys.version)
 ```
 
-For local development from a checkout:
+BoneMechanoregulation and `parosol-py` currently require Python 3.11 or newer.
+If your Slicer reports Python 3.10 or older, install and run this package in an
+external Python environment instead of Slicer's bundled Python:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install bone-mechanoregulation
+mechanoregulation run /path/to/TimelapsedHRpQCT --profile XtremeCTII
+```
+
+If your Slicer build uses Python 3.11 or newer, install from Slicer's Python
+interactor with Slicer's pip helper:
 
 ```python
-import sys
-import subprocess
+import slicer
 
-subprocess.check_call([
-    sys.executable,
-    "-m",
-    "pip",
-    "install",
-    "-e",
-    "/path/to/BoneMechanoregulation",
-])
+slicer.util.pip_install("bone-mechanoregulation")
 ```
 
-The package supports the same Python version range used by the current
-TimelapsedHRpQCT packaging matrix: Python 3.11, 3.12, and 3.13. If a Slicer
-release ships an older Python, use an external Python environment for the batch
-analysis or install through the matching Slicer toolbox once it provides a
-compatible runtime.
+For local development from a checkout in a Python-3.11+ Slicer:
+
+```python
+import slicer
+
+slicer.util.pip_install("-e /path/to/BoneMechanoregulation")
+```
+
+Inside Slicer, console entry points such as `mechanoregulation` may not be on
+the shell `PATH`. You can still run the workflow from the interactor:
+
+```python
+from bonemechreg.post_timelapse import run_post_timelapse_mechanoregulation
+
+run_post_timelapse_mechanoregulation(
+    dataset_root="/path/to/TimelapsedHRpQCT",
+    profile="XtremeCTII",
+    verbose=True,
+)
+```
+
+For routine batch analysis, the external Python environment is usually the
+cleaner route. Slicer remains the recommended place to run and visually inspect
+TimelapsedHRpQCT first; BoneMechanoregulation then consumes that Timelapsed
+output root.
 
 ## Batch Usage
 
