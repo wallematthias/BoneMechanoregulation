@@ -1,0 +1,13 @@
+name: mechanoregulation
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - scipy
+  - simpleitk
+  - matplotlib
+  - pytest
+  - pip:
+      - parosol-py>=0.1.13
