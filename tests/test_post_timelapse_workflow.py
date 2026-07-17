@@ -8,7 +8,10 @@ import pytest
 import SimpleITK as sitk
 
 from bonemechreg.timelapse import case_outputs, discover_timelapse_cases
-from bonemechreg.post_timelapse import run_post_timelapse_mechanoregulation
+from bonemechreg.post_timelapse import (
+    run_post_timelapse_case,
+    run_post_timelapse_mechanoregulation,
+)
 
 
 def _write_image(path: Path, value: int = 1) -> None:
@@ -61,6 +64,7 @@ def test_run_cases_reuses_existing_sed_when_summary_missing(tmp_path: Path, monk
         plot_paths = {"conditional_curves": outputs["curves"]}
 
     def fake_mechreg(**kwargs):
+        assert kwargs["n_boot"] == 100
         called["analyze"] += 1
         outputs["curves"].write_bytes(b"plot")
         return FakeResult()
@@ -108,6 +112,7 @@ def test_verbose_run_reports_existing_sed_reuse(
         raise AssertionError("existing SED should be reused")
 
     def fake_mechreg(**kwargs):
+        assert kwargs["n_boot"] == 100
         outputs["curves"].write_bytes(b"plot")
         return FakeResult()
 
@@ -180,6 +185,7 @@ def test_run_cases_builds_material_labels_from_native_baseline_segmentation(
 
     def fake_mechreg(**kwargs):
         assert kwargs["analysis_mask"] is not None
+        assert kwargs["n_boot"] == 100
         outputs["curves"].write_bytes(b"plot")
         return FakeResult()
 
@@ -190,6 +196,79 @@ def test_run_cases_builds_material_labels_from_native_baseline_segmentation(
 
     assert summary["processed"] == 1
     assert outputs["material"].exists()
+
+
+def test_run_cases_analyzes_available_timelapse_rois_without_resolving_sed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "dataset"
+    site = root / "derivatives" / "TimelapsedHRpQCT" / "sub-001" / "site-radius"
+    remodelling = site / "analysis" / "visualize" / "sub-001_site-radius_comp-full_t0-T1_t1-T2_remodelling.nii.gz"
+    baseline = site / "transformed_images" / "ses-T1" / "sub-001_site-radius_ses-T1_image_fused.nii.gz"
+    stack = site / "ses-T1" / "stacks"
+    segmentation = stack / "sub-001_site-radius_ses-T1_stack-01_seg.nii.gz"
+    full = stack / "sub-001_site-radius_ses-T1_stack-01_mask-full.nii.gz"
+    trab = stack / "sub-001_site-radius_ses-T1_stack-01_mask-trab.nii.gz"
+    cort = stack / "sub-001_site-radius_ses-T1_stack-01_mask-cort.nii.gz"
+
+    _write_array(remodelling, np.full((2, 2, 2), 2, dtype=np.uint8))
+    _write_image(baseline, value=1)
+    _write_array(segmentation, np.ones((2, 2, 2), dtype=np.uint8))
+    _write_array(full, np.ones((2, 2, 2), dtype=np.uint8))
+    trab_values = np.zeros((2, 2, 2), dtype=np.uint8)
+    trab_values[:, :, 0] = 1
+    cort_values = np.zeros((2, 2, 2), dtype=np.uint8)
+    cort_values[:, :, 1] = 1
+    _write_array(trab, trab_values)
+    _write_array(cort, cort_values)
+
+    case = discover_timelapse_cases(root)[0]
+    outputs = case_outputs(case)
+    outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
+    _write_image(outputs["sed"], value=3)
+    analyzed_rois = []
+
+    class FakeResult:
+        orf = 2.0
+        orr = 0.5
+        orf_ci = (1.5, 2.5)
+        orr_ci = (0.25, 0.75)
+        orr_increasing_strain = 0.5
+        orr_decreasing_strain = 2.0
+        orr_increasing_strain_ci = (0.25, 0.75)
+        orr_decreasing_strain_ci = (1.3333333333333333, 4.0)
+        pvalue_form = 0.01
+        pvalue_res = 0.02
+        conditional_curves = {"F": {"mean": [0.1]}, "R": {"mean": [0.2]}, "Q": {"mean": [0.7]}, "support": [0.1]}
+        binned_odds_diagnostics = {}
+        sample_counts = {"n_sampled_voxels": 10}
+        settings = {}
+        plot_paths = {}
+
+    def fail_solve(**kwargs):
+        raise AssertionError("existing SED should be reused once for all ROIs")
+
+    def fake_mechreg(**kwargs):
+        roi_name = kwargs["run_name"].split("_roi-")[-1]
+        analyzed_rois.append(roi_name)
+        assert kwargs["surface_event_mapping"] == "surface_dilation_resorption_wins"
+        assert kwargs["odds_model"] == "clipped_sed_unit"
+        return FakeResult()
+
+    monkeypatch.setattr("bonemechreg.post_timelapse.solve_sed_to_file", fail_solve)
+    monkeypatch.setattr("bonemechreg.post_timelapse.mechanoregulation", fake_mechreg)
+
+    summary = run_post_timelapse_mechanoregulation(dataset_root=root, profile="XtremeCTI", reanalyze=True)
+
+    assert analyzed_rois == ["full", "trab", "cort"]
+    assert summary["processed"] == 1
+    for roi in analyzed_rois:
+        roi_outputs = case_outputs(case, roi=roi)
+        assert roi_outputs["summary"].exists()
+        assert roi_outputs["csv"].exists()
+        payload = json.loads(roi_outputs["summary"].read_text(encoding="utf-8"))
+        assert payload["roi"] == roi
 
 
 def test_run_cases_dry_run_reports_discovered_cases(tmp_path: Path) -> None:
@@ -204,6 +283,98 @@ def test_run_cases_dry_run_reports_discovered_cases(tmp_path: Path) -> None:
     assert summary["discovered"] == 1
     assert summary["processed"] == 0
     assert summary["dry_run"] is True
+
+
+def test_run_cases_filters_by_case_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, case = _make_case_fixture(tmp_path)
+    called = {"case": None}
+
+    def fake_run_case(case_arg, profile, overwrite, *, reanalyze=False, n_boot=100, bootstrap_sampling_perc=100.0, verbose=False):
+        called["case"] = case_arg
+
+    monkeypatch.setattr("bonemechreg.post_timelapse._run_case", fake_run_case)
+
+    summary = run_post_timelapse_mechanoregulation(
+        dataset_root=root,
+        profile="XtremeCTII",
+        case_id=case.case_id,
+    )
+
+    assert called["case"] == case
+    assert summary["discovered"] == 1
+    assert summary["processed"] == 1
+
+
+def test_run_cases_missing_case_id_runs_no_cases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, _case = _make_case_fixture(tmp_path)
+
+    def fail_run_case(*args, **kwargs):
+        raise AssertionError("no case should be run")
+
+    monkeypatch.setattr("bonemechreg.post_timelapse._run_case", fail_run_case)
+
+    summary = run_post_timelapse_mechanoregulation(
+        dataset_root=root,
+        profile="XtremeCTII",
+        case_id="missing-case",
+    )
+
+    assert summary["discovered"] == 0
+    assert summary["processed"] == 0
+
+
+def test_run_post_timelapse_case_returns_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _root, case = _make_case_fixture(tmp_path)
+    called = {"case": None}
+
+    def fake_run_case(case_arg, profile, overwrite, *, reanalyze=False, n_boot=100, bootstrap_sampling_perc=100.0, verbose=False):
+        called["case"] = case_arg
+        assert profile == "XtremeCTII"
+        assert overwrite is False
+        assert reanalyze is False
+        assert n_boot == 100
+        assert bootstrap_sampling_perc == 100.0
+        assert verbose is False
+
+    monkeypatch.setattr("bonemechreg.post_timelapse._run_case", fake_run_case)
+
+    summary = run_post_timelapse_case(case, profile="XtremeCTII")
+
+    assert called["case"] == case
+    assert summary["discovered"] == 1
+    assert summary["processed"] == 1
+    assert summary["skipped"] == 0
+    assert summary["failed"] == 0
+    assert summary["dry_run"] is False
+    assert summary["case_id"] == case.case_id
+    assert summary["output_dir"] == str(case.output_dir)
+
+
+def test_run_post_timelapse_case_passes_configured_bootstrap_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _root, case = _make_case_fixture(tmp_path)
+
+    def fake_run_case(case_arg, profile, overwrite, *, reanalyze=False, n_boot=100, bootstrap_sampling_perc=100.0, verbose=False):
+        assert case_arg == case
+        assert profile == "XtremeCTII"
+        assert overwrite is False
+        assert reanalyze is False
+        assert n_boot == 37
+        assert bootstrap_sampling_perc == 5.0
+        assert verbose is False
+
+    monkeypatch.setattr("bonemechreg.post_timelapse._run_case", fake_run_case)
+
+    summary = run_post_timelapse_case(
+        case,
+        profile="XtremeCTII",
+        n_boot=37,
+        bootstrap_sampling_perc=5.0,
+    )
+
+    assert summary["processed"] == 1
 
 
 def test_run_cases_skips_complete_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -225,3 +396,32 @@ def test_run_cases_skips_complete_outputs(tmp_path: Path, monkeypatch: pytest.Mo
 
     assert summary["skipped"] == 1
     assert summary["processed"] == 0
+
+
+def test_reanalyze_reruns_complete_case_without_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, case = _make_case_fixture(tmp_path)
+    outputs = case_outputs(case)
+    outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
+    _write_image(outputs["sed"], value=3)
+    outputs["summary"].write_text(json.dumps({"ok": True}), encoding="utf-8")
+    outputs["csv"].write_text("ok\n", encoding="utf-8")
+    outputs["curves"].write_bytes(b"plot")
+    outputs["schulte_curves"].write_bytes(b"plot")
+    called = {"reanalyze": None}
+
+    def fake_run_case(case_arg, profile, overwrite, *, reanalyze=False, n_boot=100, bootstrap_sampling_perc=100.0, verbose=False):
+        assert case_arg == case
+        assert overwrite is False
+        called["reanalyze"] = reanalyze
+
+    monkeypatch.setattr("bonemechreg.post_timelapse._run_case", fake_run_case)
+
+    summary = run_post_timelapse_mechanoregulation(
+        dataset_root=root,
+        profile="XtremeCTII",
+        reanalyze=True,
+    )
+
+    assert called["reanalyze"] is True
+    assert summary["processed"] == 1
+    assert summary["skipped"] == 0

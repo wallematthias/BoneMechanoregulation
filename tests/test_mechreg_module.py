@@ -420,6 +420,47 @@ def test_overlapping_projected_events_cancel_to_quiescence() -> None:
     assert np.count_nonzero(labels == 3) == 4
 
 
+def test_surface_dilation_resorption_wins_samples_all_sed_surface_and_resorption_wins_overlap() -> None:
+    remodelling = np.full((5, 5, 5), 2, dtype=np.int16)
+    strain = np.ones((5, 5, 5), dtype=np.float32)
+    remodelling[0, 2, 1] = 1
+    remodelling[0, 2, 3] = 3
+
+    labels, _sampled_strain, counts = mechreg_module._extract_surface_dilated_events(
+        remodelling,
+        strain,
+        resorption_label=1,
+        quiescence_label=2,
+        formation_label=3,
+        cap_percentile=99.0,
+        surface_event_mapping="surface_dilation_resorption_wins",
+    )
+
+    assert counts["surface_event_mapping"] == "surface_dilation_resorption_wins"
+    assert counts["n_surface_voxels"] == 98
+    assert counts["n_resorption_wins_overlap"] == 1
+    assert np.count_nonzero(labels == 1) == 5
+    assert np.count_nonzero(labels == 3) == 4
+
+
+def test_legacy_surface_mapping_alias_is_normalized_in_public_settings() -> None:
+    remodelling, baseline = _make_gaussian_surface_case(quiescence_factor=5, strain_scale=1.0)
+
+    out = mechanoregulation(
+        remodelling_image=remodelling,
+        baseline_strain=baseline,
+        n_boot=3,
+        bootstrap_sampling_perc=100.0,
+        surface_event_mapping="timelapsed_v1",
+        odds_model="timelapsed_v1",
+        return_full=True,
+    )
+
+    assert out.settings["surface_event_mapping"] == "surface_dilation_resorption_wins"
+    assert out.settings["odds_model"] == "clipped_sed_unit"
+    assert out.settings["logistic_or_unit"] == "one_clipped_sed_unit"
+
+
 def test_mechanoregulation_resorption_or_definitions_are_reciprocal() -> None:
     remodelling, baseline = _make_gaussian_surface_case(quiescence_factor=5, strain_scale=1.0)
 

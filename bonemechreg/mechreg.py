@@ -650,6 +650,7 @@ def _extract_surface_dilated_events(
     quiescence_label: int,
     formation_label: int,
     cap_percentile: float,
+    surface_event_mapping: str = "symmetric_surface_cancel_overlap",
 ) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
     """Return event labels and SED sampled on the baseline bone surface.
 
@@ -661,6 +662,22 @@ def _extract_surface_dilated_events(
     surface voxel, that location is treated as ambiguous and remains
     quiescent.
     """
+    mapping = _normalize_surface_event_mapping(surface_event_mapping)
+    if mapping == "surface_dilation_resorption_wins":
+        return _extract_surface_dilation_resorption_wins_events(
+            remodelling_xyz,
+            strain_xyz,
+            mask_xyz=mask_xyz,
+            resorption_label=resorption_label,
+            quiescence_label=quiescence_label,
+            formation_label=formation_label,
+            cap_percentile=cap_percentile,
+        )
+    if mapping != "symmetric_surface_cancel_overlap":
+        raise ValueError(
+            "surface_event_mapping must be 'symmetric_surface_cancel_overlap' or "
+            "'surface_dilation_resorption_wins'"
+        )
     if mask_xyz is None:
         analysis_mask = np.ones(remodelling_xyz.shape, dtype=bool)
     else:
@@ -729,6 +746,91 @@ def _extract_surface_dilated_events(
         "n_quiescence": int(np.count_nonzero(sampled_events == int(quiescence_label))),
         "n_cancelled_overlap": int(np.count_nonzero(both)),
         "surface_event_mapping": "symmetric_surface_cancel_overlap",
+    }
+    return sampled_events, sampled_strain, counts
+
+
+def _normalize_surface_event_mapping(value: str) -> str:
+    """Normalize surface sampling aliases to durable descriptive method names."""
+    mapping = str(value).strip().lower()
+    if mapping in {"timelapsed_v1", "legacy_timelapsed_v1", "v1", "surface_dilation", "surface_dilation_resorption_wins"}:
+        return "surface_dilation_resorption_wins"
+    return mapping
+
+
+def _normalize_odds_model(value: str) -> str:
+    """Normalize odds-model aliases to durable descriptive method names."""
+    model = str(value).strip().lower()
+    if model in {"timelapsed_v1", "legacy_timelapsed_v1", "v1", "clipped_sed", "clipped_sed_unit"}:
+        return "clipped_sed_unit"
+    return model
+
+
+def _extract_surface_dilation_resorption_wins_events(
+    remodelling_xyz: np.ndarray,
+    strain_xyz: np.ndarray,
+    *,
+    mask_xyz: np.ndarray | None = None,
+    resorption_label: int,
+    quiescence_label: int,
+    formation_label: int,
+    cap_percentile: float,
+) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+    """Return surface labels by dilating events and letting resorption win overlap.
+
+    This method samples every SED-positive surface voxel inside the mask, then
+    assigns F/R labels from one-voxel dilated event maps. It does not require
+    the sampled surface voxel itself to be quiescent. If a sampled surface voxel
+    is touched by both formation and resorption, resorption wins.
+    """
+    if mask_xyz is None:
+        analysis_mask = np.ones(remodelling_xyz.shape, dtype=bool)
+    else:
+        analysis_mask = np.asarray(mask_xyz) > 0
+        if analysis_mask.shape != remodelling_xyz.shape:
+            raise ValueError("analysis_mask shape must match remodelling_image")
+
+    finite_strain = np.isfinite(strain_xyz)
+    eval_mask = analysis_mask & (remodelling_xyz > 0) & finite_strain
+    if not np.any(eval_mask):
+        return np.array([], dtype=np.int16), np.array([], dtype=np.float64), {
+            "n_eval_voxels": 0,
+            "n_surface_voxels": 0,
+            "n_sampled_voxels": 0,
+            "n_formation": 0,
+            "n_resorption": 0,
+            "n_quiescence": 0,
+            "surface_event_mapping": "surface_dilation_resorption_wins",
+        }
+
+    strain = strain_xyz.astype(np.float64, copy=True)
+    strain[~eval_mask] = 0.0
+    cap_value = float(np.percentile(strain[eval_mask], float(cap_percentile)))
+    strain[eval_mask] = np.minimum(strain[eval_mask], cap_value)
+
+    baseline_bone = strain > 0.0
+    bone_surface = analysis_mask & np.logical_xor(baseline_bone, _erode_6(baseline_bone))
+    form_dil = analysis_mask & _dilate_6(analysis_mask & (remodelling_xyz == int(formation_label)))
+    res_dil = analysis_mask & _dilate_6(analysis_mask & (remodelling_xyz == int(resorption_label)))
+
+    sampled_labels = np.full(remodelling_xyz.shape, int(quiescence_label), dtype=np.int16)
+    sampled_labels[bone_surface & form_dil] = int(formation_label)
+    sampled_labels[bone_surface & res_dil] = int(resorption_label)
+
+    both = bone_surface & form_dil & res_dil
+    sampled_strain = strain[bone_surface]
+    sampled_events = sampled_labels[bone_surface]
+
+    counts = {
+        "n_eval_voxels": int(np.count_nonzero(eval_mask)),
+        "n_surface_voxels": int(np.count_nonzero(bone_surface)),
+        "n_sampled_voxels": int(np.count_nonzero(bone_surface)),
+        "n_formation": int(np.count_nonzero(sampled_events == int(formation_label))),
+        "n_resorption": int(np.count_nonzero(sampled_events == int(resorption_label))),
+        "n_quiescence": int(np.count_nonzero(sampled_events == int(quiescence_label))),
+        "n_cancelled_overlap": 0,
+        "n_resorption_wins_overlap": int(np.count_nonzero(both)),
+        "surface_event_mapping": "surface_dilation_resorption_wins",
     }
     return sampled_events, sampled_strain, counts
 
@@ -961,6 +1063,8 @@ def mechanoregulation(
     ci_alpha: float = 0.01,
     resorption_or_definition: str = "decreasing_strain",
     legacy_clip_to_unit: bool = True,
+    surface_event_mapping: str = "symmetric_surface_cancel_overlap",
+    odds_model: str = "normalized_percent",
     odds_n_bins: int = 12,
     plot: bool = False,
     return_full: bool = False,
@@ -1002,6 +1106,13 @@ def mechanoregulation(
             interpretation of resorption.
         legacy_clip_to_unit: Optional compatibility clipping for older examples
             whose SED was already normalized to 0-1.
+        surface_event_mapping: Surface sampling convention. Use
+            ``"surface_dilation_resorption_wins"`` to sample all SED-positive
+            surface voxels and resolve formation/resorption overlap as
+            resorption.
+        odds_model: Logistic odds convention. ``"normalized_percent"`` reports
+            odds per one normalized SED percentage point.
+            ``"clipped_sed_unit"`` reports odds per clipped 0-1 SED unit.
         plot: If true, write diagnostic figures into ``work_dir``.
         return_full: If true, return :class:`MechanoregulationResult`; otherwise
             return only ``(OR_F, OR_R)`` for older lightweight callers.
@@ -1053,6 +1164,7 @@ def mechanoregulation(
         quiescence_label=quiescence_label,
         formation_label=formation_label,
         cap_percentile=cap_percentile,
+        surface_event_mapping=surface_event_mapping,
     )
     if strain.size < 3:
         raise ValueError("not enough sampled voxels for mechanoregulation analysis")
@@ -1071,16 +1183,20 @@ def mechanoregulation(
     if np.all(y_form == y_form[0]) or np.all(y_res == y_res[0]):
         raise ValueError("sampled labels must contain both positive and negative classes for F and R")
 
-    # The full-data logistic slopes are used as fallbacks. The reported OR point
-    # estimates come from the bootstrap median below because that matches the
-    # bootstrap confidence interval construction.
-    beta_form, _cov_form, pval_form_full = _fit_logistic_binary_legacy(strain_percent, y_form)
-    beta_res, _cov_res, pval_res_full = _fit_logistic_binary_legacy(strain_percent, y_res)
-    beta_form_curve, _cov_form_curve, _pval_form_curve = _fit_logistic_binary_class_balanced(strain_percent, y_form)
-    beta_res_curve, _cov_res_curve, _pval_res_curve = _fit_logistic_binary_class_balanced(strain_percent, y_res)
     res_or_def = str(resorption_or_definition).strip().lower()
     if res_or_def not in {"increasing_strain", "decreasing_strain"}:
         raise ValueError("resorption_or_definition must be 'increasing_strain' or 'decreasing_strain'")
+    odds_mode = _normalize_odds_model(odds_model)
+    if odds_mode not in {"normalized_percent", "clipped_sed_unit"}:
+        raise ValueError("odds_model must be 'normalized_percent' or 'clipped_sed_unit'")
+    odds_strain = strain if odds_mode == "clipped_sed_unit" else strain_percent
+    odds_fit = _fit_logistic_binary_legacy if odds_mode == "clipped_sed_unit" else _fit_logistic_binary_class_balanced
+    # The full-data logistic slopes are used as fallbacks. The reported OR point
+    # estimates come from bootstrap slopes below.
+    beta_form, _cov_form, pval_form_full = odds_fit(odds_strain, y_form)
+    beta_res, _cov_res, pval_res_full = odds_fit(odds_strain, y_res)
+    beta_form_curve, _cov_form_curve, _pval_form_curve = _fit_logistic_binary_class_balanced(strain_percent, y_form)
+    beta_res_curve, _cov_res_curve, _pval_res_curve = _fit_logistic_binary_class_balanced(strain_percent, y_res)
 
     # Step 5: evaluate smooth model curves and keep Schulte histograms as diagnostics.
     schulte_curves = _schulte_conditional_curves(
@@ -1125,8 +1241,9 @@ def mechanoregulation(
         if np.all(yf_b == yf_b[0]) or np.all(yr_b == yr_b[0]):
             continue
         try:
-            beta_f_b, _cov_f_b, p_f_b = _fit_logistic_binary_class_balanced(s_b, yf_b)
-            beta_r_b, _cov_r_b, p_r_b = _fit_logistic_binary_class_balanced(s_b, yr_b)
+            s_fit_b = odds_strain[boot_idx]
+            beta_f_b, _cov_f_b, p_f_b = odds_fit(s_fit_b, yf_b)
+            beta_r_b, _cov_r_b, p_r_b = odds_fit(s_fit_b, yr_b)
         except np.linalg.LinAlgError:
             continue
         boot_beta_form[i, :] = beta_f_b
@@ -1152,6 +1269,8 @@ def mechanoregulation(
         ci_alpha=alpha,
     )
     conditional_curves["class_weighting"] = "balanced_event_vs_non_event"
+    conditional_curves["reported_or_r_definition"] = res_or_def
+    conditional_curves["x_axis_direction"] = "increasing_sed"
     conditional_curves["logistic_lazy_zone"] = _logistic_lazy_zone(conditional_curves)
 
     def _or_from_boot_slopes(
@@ -1166,6 +1285,10 @@ def mechanoregulation(
             slope_mean = float(fallback_slope)
             slope_lo = float(fallback_slope)
             slope_hi = float(fallback_slope)
+        elif odds_mode == "clipped_sed_unit":
+            slope_mean = float(np.mean(finite))
+            slope_lo = float(np.percentile(finite, ql, method="midpoint"))
+            slope_hi = float(np.percentile(finite, qh, method="midpoint"))
         else:
             slope_mean = float(np.percentile(finite, 50.0, method="midpoint"))
             slope_lo = float(np.percentile(finite, ql, method="midpoint"))
@@ -1242,13 +1365,14 @@ def mechanoregulation(
         "bootstrap_sampling_perc": float(bootstrap_sampling_perc),
         "ci_alpha": float(ci_alpha),
         "legacy_clip_to_unit": bool(legacy_clip_to_unit),
-        "logistic_strain_scale": "normalized_percent_of_analysis_max_after_cap",
-        "logistic_or_unit": "one_normalized_percentage_point",
+        "logistic_strain_scale": "clipped_sed_0_to_1" if odds_mode == "clipped_sed_unit" else "normalized_percent_of_analysis_max_after_cap",
+        "logistic_or_unit": "one_clipped_sed_unit" if odds_mode == "clipped_sed_unit" else "one_normalized_percentage_point",
+        "odds_model": odds_mode,
         "fit_backend_form": "local_newton_logit",
         "fit_backend_res": "local_newton_logit",
         "odds_n_bins": int(odds_n_bins),
         "sampling_strategy": "class-balanced bootstrap with replacement (legacy-aligned)",
-        "surface_event_mapping": "symmetric_surface_cancel_overlap",
+        "surface_event_mapping": str(counts.get("surface_event_mapping", surface_event_mapping)),
         "baseline_source": baseline_source,
         "resorption_or_definition": res_or_def,
         "remodelling_source": "density_flip_and_threshold" if remodelling_image is None else "provided_label_image",

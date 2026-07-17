@@ -22,8 +22,26 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("dataset_root", type=Path)
     run_parser.add_argument("--profile", required=True)
+    run_parser.add_argument("--case-id", help="Run only the exact discovered TimelapsedHRpQCT case ID.")
     run_parser.add_argument("--overwrite", action="store_true")
+    run_parser.add_argument(
+        "--reanalyze",
+        action="store_true",
+        help="Regenerate mechanoregulation summaries and curves while reusing existing SED outputs.",
+    )
     run_parser.add_argument("--dry-run", action="store_true")
+    run_parser.add_argument(
+        "--n-boot",
+        type=int,
+        default=100,
+        help="Number of bootstrap replicates for mechanoregulation confidence intervals.",
+    )
+    run_parser.add_argument(
+        "--bootstrap-sampling-perc",
+        type=float,
+        default=100.0,
+        help="Percent of the smallest F/R/Q class sampled per bootstrap replicate.",
+    )
     run_parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -43,7 +61,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             dataset_root=args.dataset_root,
             profile=args.profile,
             overwrite=bool(args.overwrite),
+            reanalyze=bool(args.reanalyze),
             dry_run=bool(args.dry_run),
+            case_id=args.case_id,
+            n_boot=int(args.n_boot),
+            bootstrap_sampling_perc=float(args.bootstrap_sampling_perc),
             verbose=bool(args.verbose),
         )
         print(format_workflow_summary(summary))

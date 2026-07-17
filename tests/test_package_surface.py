@@ -15,3 +15,7 @@ def test_console_script_is_declared_in_pyproject() -> None:
 
 def test_package_exports_post_timelapse_surface_only() -> None:
     assert hasattr(bonemechreg, "mechanoregulation")
+
+
+def test_package_version_includes_selected_case_api_release() -> None:
+    assert bonemechreg.__version__ == "0.1.2"

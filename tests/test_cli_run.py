@@ -32,7 +32,72 @@ def test_cli_run_invokes_workflow_with_expected_flags(tmp_path: Path, monkeypatc
 
     assert exit_code == 0
     assert recorded["profile"] == "XtremeCTII"
+    assert recorded["case_id"] is None
     assert recorded["overwrite"] is True
+    assert recorded["reanalyze"] is False
+    assert recorded["n_boot"] == 100
+    assert recorded["bootstrap_sampling_perc"] == 100.0
+
+
+def test_cli_run_accepts_bootstrap_options(tmp_path: Path, monkeypatch, capsys) -> None:
+    recorded: dict[str, object] = {}
+
+    def fake_run(**kwargs):
+        recorded.update(kwargs)
+        return {"discovered": 1, "processed": 1, "skipped": 0, "failed": 0, "dry_run": False}
+
+    monkeypatch.setattr("bonemechreg.cli.run_post_timelapse_mechanoregulation", fake_run)
+
+    exit_code = main(
+        [
+            "run",
+            str(tmp_path),
+            "--profile",
+            "XtremeCTII",
+            "--n-boot",
+            "37",
+            "--bootstrap-sampling-perc",
+            "5",
+        ]
+    )
+    capsys.readouterr()
+
+    assert exit_code == 0
+    assert recorded["n_boot"] == 37
+    assert recorded["bootstrap_sampling_perc"] == 5.0
+
+
+def test_cli_run_accepts_reanalyze_without_overwrite(tmp_path: Path, monkeypatch, capsys) -> None:
+    recorded: dict[str, object] = {}
+
+    def fake_run(**kwargs):
+        recorded.update(kwargs)
+        return {"discovered": 1, "processed": 1, "skipped": 0, "failed": 0, "dry_run": False}
+
+    monkeypatch.setattr("bonemechreg.cli.run_post_timelapse_mechanoregulation", fake_run)
+
+    exit_code = main(["run", str(tmp_path), "--profile", "XtremeCTII", "--reanalyze"])
+    capsys.readouterr()
+
+    assert exit_code == 0
+    assert recorded["reanalyze"] is True
+    assert recorded["overwrite"] is False
+
+
+def test_cli_run_accepts_case_id(tmp_path: Path, monkeypatch, capsys) -> None:
+    recorded: dict[str, object] = {}
+
+    def fake_run(**kwargs):
+        recorded.update(kwargs)
+        return {"discovered": 1, "processed": 1, "skipped": 0, "failed": 0, "dry_run": False}
+
+    monkeypatch.setattr("bonemechreg.cli.run_post_timelapse_mechanoregulation", fake_run)
+
+    exit_code = main(["run", str(tmp_path), "--profile", "XtremeCTII", "--case-id", "case-001"])
+    capsys.readouterr()
+
+    assert exit_code == 0
+    assert recorded["case_id"] == "case-001"
 
 
 def test_cli_analyze_runs_standalone_folder(tmp_path: Path, monkeypatch, capsys) -> None:

@@ -87,14 +87,24 @@ def write_mechanoregulation_summary(
     profile: str,
     result: MechanoregulationResult,
     output_path: str | Path,
+    roi: str = "full",
 ) -> Path:
     """Write a JSON summary for one TimelapsedHRpQCT pairwise case."""
     output_path = Path(output_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    row = _summary_row(result)
     payload: dict[str, Any] = {
         "subject_id": case.subject_id,
         "case_id": case.case_id,
+        "roi": str(roi),
         "profile": profile,
+        "CCR": row["CCR"],
+        "CCR_low_threshold": row["CCR_low_threshold"],
+        "CCR_high_threshold": row["CCR_high_threshold"],
+        "binned_lazy_zone_low": row["binned_lazy_zone_low"],
+        "binned_lazy_zone_high": row["binned_lazy_zone_high"],
+        "logistic_lazy_zone_low": row["logistic_lazy_zone_low"],
+        "logistic_lazy_zone_high": row["logistic_lazy_zone_high"],
         "OR_F": _odds_increase_percent(result.orf),
         "OR_R": _odds_increase_percent(result.orr),
         "OR_F_CI": [
@@ -149,7 +159,15 @@ def write_mechanoregulation_summary_payload(
     """Write a JSON summary when no TimelapsedHRpQCT case object is available."""
     output_path = Path(output_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    row = _summary_row(result)
     payload: dict[str, Any] = {
+        "CCR": row["CCR"],
+        "CCR_low_threshold": row["CCR_low_threshold"],
+        "CCR_high_threshold": row["CCR_high_threshold"],
+        "binned_lazy_zone_low": row["binned_lazy_zone_low"],
+        "binned_lazy_zone_high": row["binned_lazy_zone_high"],
+        "logistic_lazy_zone_low": row["logistic_lazy_zone_low"],
+        "logistic_lazy_zone_high": row["logistic_lazy_zone_high"],
         "OR_F": _odds_increase_percent(result.orf),
         "OR_R": _odds_increase_percent(result.orr),
         "OR_F_CI": [

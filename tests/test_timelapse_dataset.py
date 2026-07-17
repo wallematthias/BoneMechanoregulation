@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import SimpleITK as sitk
 
-from bonemechreg.timelapse import case_outputs, discover_timelapse_cases
+from bonemechreg.timelapse import available_case_rois, case_outputs, discover_timelapse_cases
 
 
 def _write_image(path: Path) -> None:
@@ -47,6 +47,28 @@ def test_discover_cases_returns_pairwise_t0_case(tmp_path: Path) -> None:
     assert cases[0].remodelling_image_path == remodelling_path
 
 
+def test_discover_cases_accepts_direct_timelapsed_derivative_root(tmp_path: Path) -> None:
+    root = tmp_path / "dataset"
+    derivative_root = root / "derivatives" / "TimelapsedHRpQCT"
+    remodelling_path = (
+        derivative_root
+        / "sub-001"
+        / "analysis"
+        / "pairwise_t0"
+        / "ses-C1_ses-C2"
+        / "sub-001_ses-C1_ses-C2_remodelling.nii.gz"
+    )
+    baseline_path = remodelling_path.with_name("sub-001_ses-C1_pairwise_t0_image.nii.gz")
+    _write_image(remodelling_path)
+    _write_image(baseline_path)
+
+    cases = discover_timelapse_cases(derivative_root)
+
+    assert len(cases) == 1
+    assert cases[0].subject_id == "sub-001"
+    assert cases[0].remodelling_image_path == remodelling_path
+
+
 def test_case_outputs_use_expected_suffixes(tmp_path: Path) -> None:
     root = tmp_path / "dataset"
     remodelling_path = root / "derivatives" / "TimelapsedHRpQCT" / "sub-001" / "analysis" / "pairwise_t0" / "ses-C1_ses-C2" / "sub-001_ses-C1_ses-C2_remodelling.nii.gz"
@@ -61,6 +83,26 @@ def test_case_outputs_use_expected_suffixes(tmp_path: Path) -> None:
     assert outputs["summary"].name.endswith("_mechanoregulation_summary.json")
     assert outputs["csv"].name.endswith("_mechanoregulation_summary.csv")
     assert outputs["curves"].name.endswith("_conditional_curves.png")
+
+
+def test_case_outputs_can_be_roi_scoped_without_changing_solver_artifacts(tmp_path: Path) -> None:
+    root = tmp_path / "dataset"
+    remodelling_path = root / "derivatives" / "TimelapsedHRpQCT" / "sub-001" / "analysis" / "pairwise_t0" / "ses-C1_ses-C2" / "sub-001_ses-C1_ses-C2_remodelling.nii.gz"
+    baseline_path = remodelling_path.with_name("sub-001_ses-C1_pairwise_t0_image.nii.gz")
+    _write_image(remodelling_path)
+    _write_image(baseline_path)
+
+    case = discover_timelapse_cases(root)[0]
+    base_outputs = case_outputs(case)
+    trab_outputs = case_outputs(case, roi="trab")
+
+    assert available_case_rois(case) == {"full": None}
+    assert trab_outputs["sed"] == base_outputs["sed"]
+    assert trab_outputs["material"] == base_outputs["material"]
+    assert trab_outputs["summary"].name.endswith("_roi-trab_mechanoregulation_summary.json")
+    assert trab_outputs["csv"].name.endswith("_roi-trab_mechanoregulation_summary.csv")
+    assert trab_outputs["curves"].name.endswith("_roi-trab_conditional_curves.png")
+    assert trab_outputs["schulte_curves"].name.endswith("_roi-trab_schulte_binned_curves.png")
 
 
 def test_discover_cases_supports_current_timelapsed_visualize_layout(tmp_path: Path) -> None:
@@ -95,3 +137,44 @@ def test_discover_cases_supports_current_timelapsed_visualize_layout(tmp_path: P
     assert cases[0].baseline_image_path == baseline_path
     assert cases[0].remodelling_image_path == remodelling_path
     assert cases[0].output_dir == remodelling_path.parents[2] / "mechanoregulation"
+
+
+def test_discover_cases_accepts_selected_current_subject_root(tmp_path: Path) -> None:
+    subject_root = tmp_path / "TimelapsedHRpQCT" / "sub-SAMPLE355"
+    site = subject_root / "site-tibia"
+    remodelling_path = (
+        site
+        / "analysis"
+        / "visualize"
+        / "sub-SAMPLE355_site-tibia_comp-full_t0-T1_t1-T2_thr-225p0_cluster-12_remodelling.nii.gz"
+    )
+    baseline_path = site / "transformed_images" / "ses-T1" / "sub-SAMPLE355_site-tibia_ses-T1_image_fused.nii.gz"
+    _write_image(remodelling_path)
+    _write_image(baseline_path)
+
+    cases = discover_timelapse_cases(subject_root)
+
+    assert len(cases) == 1
+    assert cases[0].subject_id == "sub-SAMPLE355"
+    assert cases[0].baseline_image_path == baseline_path
+    assert cases[0].remodelling_image_path == remodelling_path
+
+
+def test_discover_cases_accepts_selected_current_site_root(tmp_path: Path) -> None:
+    site = tmp_path / "TimelapsedHRpQCT" / "sub-SAMPLE355" / "site-tibia"
+    remodelling_path = (
+        site
+        / "analysis"
+        / "visualize"
+        / "sub-SAMPLE355_site-tibia_comp-full_t0-T1_t1-T2_thr-225p0_cluster-12_remodelling.nii.gz"
+    )
+    baseline_path = site / "transformed_images" / "ses-T1" / "sub-SAMPLE355_site-tibia_ses-T1_image_fused.nii.gz"
+    _write_image(remodelling_path)
+    _write_image(baseline_path)
+
+    cases = discover_timelapse_cases(site)
+
+    assert len(cases) == 1
+    assert cases[0].subject_id == "sub-SAMPLE355"
+    assert cases[0].baseline_image_path == baseline_path
+    assert cases[0].remodelling_image_path == remodelling_path
