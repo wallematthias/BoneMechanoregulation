@@ -140,4 +140,4 @@ def test_parosol_profile_reads_exported_sed(tmp_path: Path, monkeypatch: pytest.
 
     sed = _run_parosol_profile(image_path=tmp_path / "baseline.nii.gz", profile="XtremeCTII")
 
-    np.testing.assert_allclose(sed, expected)
+    assert np.allclose(sed, expected)
