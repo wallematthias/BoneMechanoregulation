@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
+from bone_imaging_derivatives import discover_manifests, find_records
+from bone_imaging_derivatives.layout import record_output_path
+
 
 @dataclass(frozen=True)
 class TimelapseCase:
@@ -136,6 +139,55 @@ def _glob_timelapsed_remodelling(root: Path, patterns: tuple[str, ...]) -> list[
     return paths
 
 
+def _manifest_baseline_path(record, records) -> Path | None:
+    """Find the baseline image explicitly linked to one Timelapsed record."""
+    by_id = {candidate.record_id: candidate for candidate in records}
+    for record_id in record.inputs:
+        candidate = by_id.get(record_id)
+        if candidate is not None and candidate.role in {"source_image_view", "transformed_image"}:
+            return candidate.path
+    candidates = [
+        candidate
+        for candidate in records
+        if candidate.role in {"source_image_view", "transformed_image"}
+        and candidate.subject_id == record.subject_id
+        and candidate.site == record.site
+        and candidate.session_id == record.session_id
+    ]
+    return candidates[0].path if len(candidates) == 1 else None
+
+
+def _discover_manifest_timelapse_cases(root: Path) -> list[TimelapseCase]:
+    """Build Timelapsed cases from shared derivative manifests when available."""
+    records = find_records(discover_manifests(root), derivative="Timelapsed")
+    cases: list[TimelapseCase] = []
+    for record in records:
+        if record.role != "remodelling_pairwise_table":
+            continue
+        baseline_path = _manifest_baseline_path(record, records)
+        if baseline_path is None:
+            continue
+        case_id = record.path.stem.replace(".nii", "")
+        output_dir = record_output_path(
+            root,
+            "Mechanoregulation",
+            record.subject_id,
+            record.site,
+            "runs",
+            case_id,
+        )
+        cases.append(
+            TimelapseCase(
+                subject_id=f"sub-{record.subject_id}",
+                case_id=case_id,
+                baseline_image_path=baseline_path,
+                remodelling_image_path=record.path,
+                output_dir=output_dir,
+            )
+        )
+    return cases
+
+
 def discover_timelapse_cases(dataset_root: str | Path) -> list[TimelapseCase]:
     """Return all pairwise ``t0`` remodelling cases below a Timelapsed result root.
 
@@ -144,6 +196,9 @@ def discover_timelapse_cases(dataset_root: str | Path) -> list[TimelapseCase]:
     itself, a selected ``sub-*`` folder, or a selected ``site-*`` folder.
     """
     root = Path(dataset_root).expanduser().resolve()
+    manifest_cases = _discover_manifest_timelapse_cases(root)
+    if manifest_cases:
+        return manifest_cases
     cases: list[TimelapseCase] = []
     seen_cases: set[Path] = set()
     for result_root in _existing_candidate_roots(root):
