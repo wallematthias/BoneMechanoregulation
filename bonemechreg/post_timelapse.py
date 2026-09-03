@@ -73,6 +73,22 @@ def _nearest_mask_on_grid(mask: sitk.Image, reference: sitk.Image) -> sitk.Image
     )
 
 
+def _linear_scalar_on_grid(image: sitk.Image, reference: sitk.Image) -> sitk.Image:
+    """Resample a scalar image onto the remodelling image grid."""
+    if image.GetSize() == reference.GetSize() and np.allclose(image.GetSpacing(), reference.GetSpacing()):
+        aligned = sitk.GetImageFromArray(sitk.GetArrayFromImage(image).astype(np.float32, copy=False))
+        aligned.CopyInformation(reference)
+        return aligned
+    return sitk.Resample(
+        sitk.Cast(image, sitk.sitkFloat32),
+        reference,
+        sitk.Transform(3, sitk.sitkIdentity),
+        sitk.sitkLinear,
+        0.0,
+        sitk.sitkFloat32,
+    )
+
+
 def _binary_array(path: Path, *, reference: sitk.Image, name: str) -> np.ndarray:
     """Read a binary image and confirm it is aligned with the remodelling grid."""
     image = sitk.ReadImage(str(path))
@@ -168,6 +184,9 @@ def _run_case(
 
     remodelling_img = sitk.ReadImage(str(case.remodelling_image_path))
     baseline_sed_img = sitk.ReadImage(str(sed_path))
+    if not _same_grid(remodelling_img, baseline_sed_img):
+        baseline_sed_img = _linear_scalar_on_grid(baseline_sed_img, remodelling_img)
+    _assert_same_grid(remodelling_img, baseline_sed_img, name="baseline SED")
     for roi, mask_path in available_case_rois(case).items():
         roi_outputs = case_outputs(case, roi=roi)
         if verbose:

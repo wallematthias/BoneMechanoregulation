@@ -558,7 +558,7 @@ def test_mechanoregulation_bootstrap_is_deterministic() -> None:
     assert out1.conditional_curves == out2.conditional_curves
 
 
-def test_mechanoregulation_plot_behavior(tmp_path) -> None:
+def test_mechanoregulation_plot_behavior(tmp_path, monkeypatch) -> None:
     remodelling, baseline = _make_synthetic_case()
 
     _ = mechanoregulation(
@@ -575,6 +575,14 @@ def test_mechanoregulation_plot_behavior(tmp_path) -> None:
 
     mpl = __import__("pytest").importorskip("matplotlib")
     assert mpl is not None
+    backend_calls = []
+    original_use = mpl.use
+
+    def record_backend(backend, *args, **kwargs):
+        backend_calls.append((backend, kwargs.get("force", False)))
+        return original_use(backend, *args, **kwargs)
+
+    monkeypatch.setattr(mpl, "use", record_backend)
 
     out = mechanoregulation(
         remodelling_image=remodelling,
@@ -588,5 +596,28 @@ def test_mechanoregulation_plot_behavior(tmp_path) -> None:
     )
     assert out.plot_paths is not None
     assert "schulte_binned_curves" in out.plot_paths
+    assert ("Agg", True) in backend_calls
     for path in out.plot_paths.values():
         assert path.exists()
+
+
+def test_mechanoregulation_continues_when_optional_plot_backend_is_missing(tmp_path, monkeypatch) -> None:
+    remodelling, baseline = _make_synthetic_case()
+
+    def missing_plot_backend(**_kwargs):
+        raise ModuleNotFoundError("No module named 'matplotlib'")
+
+    monkeypatch.setattr(mechreg_module, "_plot_curves", missing_plot_backend)
+
+    out = mechanoregulation(
+        remodelling_image=remodelling,
+        baseline_strain=baseline,
+        n_boot=50,
+        seed=0,
+        work_dir=tmp_path,
+        run_name="plot_missing",
+        plot=True,
+        return_full=True,
+    )
+
+    assert out.plot_paths == {}

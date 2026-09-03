@@ -955,6 +955,9 @@ def _plot_curves(
     run_name: str,
 ) -> dict[str, Path]:
     """Write logistic and Schulte-style conditional probability figures."""
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
     out: dict[str, Path] = {}
@@ -1345,15 +1348,18 @@ def mechanoregulation(
     plot_paths: dict[str, Path] | None = None
     if plot:
         local_work_dir = _ensure_work_dir(work_dir)
-        plot_paths = _plot_curves(
-            strain_support=np.asarray(conditional_curves["strain"], dtype=np.float64),
-            conditional_curves=conditional_curves,
-            binned=binned,
-            odds_ratio_f=float(orf),
-            odds_ratio_r=float(orr),
-            work_dir=local_work_dir,
-            run_name=run_name,
-        )
+        try:
+            plot_paths = _plot_curves(
+                strain_support=np.asarray(conditional_curves["strain"], dtype=np.float64),
+                conditional_curves=conditional_curves,
+                binned=binned,
+                odds_ratio_f=float(orf),
+                odds_ratio_r=float(orr),
+                work_dir=local_work_dir,
+                run_name=run_name,
+            )
+        except ModuleNotFoundError:
+            plot_paths = {}
 
     settings = {
         "resorption_label": int(resorption_label),

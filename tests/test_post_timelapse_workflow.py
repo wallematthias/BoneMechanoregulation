@@ -8,6 +8,7 @@ import pytest
 import SimpleITK as sitk
 
 from bonemechreg.timelapse import case_outputs, discover_timelapse_cases
+from bonemechreg.timelapse import TimelapseCase
 from bonemechreg.post_timelapse import (
     _read_analysis_mask,
     run_post_timelapse_case,
@@ -24,6 +25,13 @@ def _write_image(path: Path, value: int = 1) -> None:
 def _write_array(path: Path, values: np.ndarray) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     sitk.WriteImage(sitk.GetImageFromArray(values.astype(np.uint8)), str(path))
+
+
+def _write_float_image(path: Path, values: np.ndarray, *, spacing=(1.0, 1.0, 1.0)) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = sitk.GetImageFromArray(values.astype(np.float32))
+    image.SetSpacing(tuple(float(value) for value in spacing))
+    sitk.WriteImage(image, str(path))
 
 
 def _make_case_fixture(tmp_path: Path):
@@ -52,6 +60,115 @@ def test_read_analysis_mask_resamples_to_remodelling_grid(tmp_path: Path) -> Non
     assert aligned.GetOrigin() == remodelling.GetOrigin()
     assert aligned.GetDirection() == remodelling.GetDirection()
     assert np.all(sitk.GetArrayFromImage(aligned) == 1)
+
+
+def test_run_case_resamples_matched_sed_to_remodelling_grid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    remodelling = tmp_path / "remodelling.nii.gz"
+    sed = tmp_path / "sed.nii.gz"
+    _write_array(remodelling, np.full((2, 2, 2), 2, dtype=np.uint8))
+    _write_float_image(sed, np.ones((4, 4, 4), dtype=np.float32), spacing=(0.5, 0.5, 0.5))
+    case = TimelapseCase(
+        subject_id="001",
+        case_id="scene-row-01",
+        baseline_image_path=remodelling,
+        remodelling_image_path=remodelling,
+        output_dir=tmp_path / "out",
+        baseline_sed_path=sed,
+        full_mask_path=None,
+    )
+    outputs = case_outputs(case)
+
+    class FakeResult:
+        orf = 2.0
+        orr = 0.5
+        orf_ci = (1.5, 2.5)
+        orr_ci = (0.25, 0.75)
+        orr_increasing_strain = 0.5
+        orr_decreasing_strain = 2.0
+        orr_increasing_strain_ci = (0.25, 0.75)
+        orr_decreasing_strain_ci = (1.3333333333333333, 4.0)
+        pvalue_form = 0.01
+        pvalue_res = 0.02
+        conditional_curves = {"F": {"mean": [0.1]}, "R": {"mean": [0.2]}, "Q": {"mean": [0.7]}, "support": [0.1]}
+        binned_odds_diagnostics = {}
+        sample_counts = {"n_sampled_voxels": 10}
+        settings = {"profile": "XtremeCTII"}
+        plot_paths = {"conditional_curves": outputs["curves"]}
+
+    def fake_mechreg(**kwargs):
+        assert kwargs["baseline_strain"].GetSize() == sitk.ReadImage(str(remodelling)).GetSize()
+        assert kwargs["baseline_strain"].GetSpacing() == sitk.ReadImage(str(remodelling)).GetSpacing()
+        outputs["curves"].write_bytes(b"plot")
+        return FakeResult()
+
+    monkeypatch.setattr("bonemechreg.post_timelapse.solve_sed_to_file", lambda **kwargs: sed)
+    monkeypatch.setattr("bonemechreg.post_timelapse.mechanoregulation", fake_mechreg)
+
+    summary = run_post_timelapse_case(case, profile="XtremeCTII", verbose=True)
+
+    assert summary["processed"] == 1
+
+
+def test_run_case_preserves_index_aligned_sed_when_physical_metadata_differs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    remodelling = tmp_path / "remodelling.nii.gz"
+    sed = tmp_path / "sed.nii.gz"
+    remodelling_image = sitk.GetImageFromArray(np.full((3, 3, 3), 2, dtype=np.uint8))
+    remodelling_image.SetSpacing((0.082, 0.082, 0.082))
+    remodelling_image.SetOrigin((46.0, 38.0, 0.0))
+    sitk.WriteImage(remodelling_image, str(remodelling))
+    sed_image = sitk.GetImageFromArray(np.ones((3, 3, 3), dtype=np.float32))
+    sed_image.SetSpacing((0.082, 0.082, 0.082))
+    sed_image.SetOrigin((-566.0, -465.0, 0.0))
+    sed_image.SetDirection((-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0))
+    sitk.WriteImage(sed_image, str(sed))
+    case = TimelapseCase(
+        subject_id="001",
+        case_id="scene-row-01",
+        baseline_image_path=remodelling,
+        remodelling_image_path=remodelling,
+        output_dir=tmp_path / "out",
+        baseline_sed_path=sed,
+        full_mask_path=None,
+    )
+    outputs = case_outputs(case)
+
+    class FakeResult:
+        orf = 2.0
+        orr = 0.5
+        orf_ci = (1.5, 2.5)
+        orr_ci = (0.25, 0.75)
+        orr_increasing_strain = 0.5
+        orr_decreasing_strain = 2.0
+        orr_increasing_strain_ci = (0.25, 0.75)
+        orr_decreasing_strain_ci = (1.3333333333333333, 4.0)
+        pvalue_form = 0.01
+        pvalue_res = 0.02
+        conditional_curves = {"F": {"mean": [0.1]}, "R": {"mean": [0.2]}, "Q": {"mean": [0.7]}, "support": [0.1]}
+        binned_odds_diagnostics = {}
+        sample_counts = {"n_sampled_voxels": 10}
+        settings = {"profile": "XtremeCTII"}
+        plot_paths = {"conditional_curves": outputs["curves"]}
+
+    def fake_mechreg(**kwargs):
+        assert kwargs["baseline_strain"].GetSize() == remodelling_image.GetSize()
+        assert kwargs["baseline_strain"].GetOrigin() == remodelling_image.GetOrigin()
+        assert kwargs["baseline_strain"].GetDirection() == remodelling_image.GetDirection()
+        assert np.count_nonzero(sitk.GetArrayFromImage(kwargs["baseline_strain"])) == 27
+        outputs["curves"].write_bytes(b"plot")
+        return FakeResult()
+
+    monkeypatch.setattr("bonemechreg.post_timelapse.solve_sed_to_file", lambda **kwargs: sed)
+    monkeypatch.setattr("bonemechreg.post_timelapse.mechanoregulation", fake_mechreg)
+
+    summary = run_post_timelapse_case(case, profile="XtremeCTII", verbose=True)
+
+    assert summary["processed"] == 1
 
 
 def test_run_cases_reuses_existing_sed_when_summary_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

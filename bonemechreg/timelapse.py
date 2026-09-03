@@ -479,11 +479,19 @@ def available_case_rois(case: TimelapseCase) -> dict[str, Path | None]:
     without an explicit mask because the source Timelapsed run did not provide
     one.
     """
-    rois: dict[str, Path | None] = {"full": case.full_mask_path if case.full_mask_path and case.full_mask_path.exists() else None}
-    if case.trab_mask_path is not None and case.trab_mask_path.exists():
-        rois["trab"] = case.trab_mask_path
-    if case.cort_mask_path is not None and case.cort_mask_path.exists():
-        rois["cort"] = case.cort_mask_path
+    def existing_path(value: Path | str | None) -> Path | None:
+        if value is None:
+            return None
+        path = Path(value)
+        return path if path.exists() else None
+
+    rois: dict[str, Path | None] = {"full": existing_path(case.full_mask_path)}
+    trab_path = existing_path(case.trab_mask_path)
+    cort_path = existing_path(case.cort_mask_path)
+    if trab_path is not None:
+        rois["trab"] = trab_path
+    if cort_path is not None:
+        rois["cort"] = cort_path
     return rois
 
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import SimpleITK as sitk
 
-from bonemechreg.timelapse import available_case_rois, case_outputs, discover_timelapse_cases
+from bonemechreg.timelapse import TimelapseCase, available_case_rois, case_outputs, discover_timelapse_cases
 
 
 def _write_image(path: Path) -> None:
@@ -218,6 +218,34 @@ def test_discover_current_timelapse_prefers_common_region_roi_masks(tmp_path: Pa
         "full": common_full,
         "trab": common_trab,
         "cort": common_cort,
+    }
+
+
+def test_available_case_rois_accepts_string_paths_from_json_adapters(tmp_path: Path) -> None:
+    remodelling = tmp_path / "remodelling.nii.gz"
+    baseline = tmp_path / "baseline.nii.gz"
+    full = tmp_path / "full.nii.gz"
+    trab = tmp_path / "trab.nii.gz"
+    cort = tmp_path / "cort.nii.gz"
+    for path in (remodelling, baseline, full, trab, cort):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"placeholder")
+
+    case = TimelapseCase(
+        subject_id="001",
+        case_id="case",
+        baseline_image_path=baseline,
+        remodelling_image_path=remodelling,
+        output_dir=tmp_path / "out",
+        full_mask_path=str(full),
+        trab_mask_path=str(trab),
+        cort_mask_path=str(cort),
+    )
+
+    assert available_case_rois(case) == {
+        "full": full,
+        "trab": trab,
+        "cort": cort,
     }
 
 

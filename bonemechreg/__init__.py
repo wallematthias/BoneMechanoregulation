@@ -12,5 +12,5 @@ __all__ = [
     "__version__",
 ]
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 from bonemechreg.mechreg import MechanoregulationResult, derive_remodelling_labels_from_density, mechanoregulation
