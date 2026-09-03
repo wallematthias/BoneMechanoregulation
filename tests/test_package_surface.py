@@ -18,4 +18,4 @@ def test_package_exports_post_timelapse_surface_only() -> None:
 
 
 def test_package_version_includes_selected_case_api_release() -> None:
-    assert bonemechreg.__version__ == "0.1.3"
+    assert bonemechreg.__version__ == "0.1.4"
