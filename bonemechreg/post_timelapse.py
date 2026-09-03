@@ -20,10 +20,11 @@ from bonemechreg.results import write_mechanoregulation_summary, write_mechanore
 from bonemechreg.parosol import solve_sed_to_file
 
 
-def _outputs_complete(outputs: dict[str, Path]) -> bool:
+def _outputs_complete(outputs: dict[str, Path], *, sed_path: Path | None = None) -> bool:
     """Return true when all expected files for one ROI already exist."""
+    sed_complete = bool(sed_path is not None and Path(sed_path).exists()) or outputs["sed"].exists()
     return (
-        outputs["sed"].exists()
+        sed_complete
         and outputs["summary"].exists()
         and outputs["csv"].exists()
         and outputs["curves"].exists()
@@ -34,8 +35,8 @@ def _outputs_complete(outputs: dict[str, Path]) -> bool:
 def _case_outputs_complete(case: TimelapseCase) -> bool:
     """Return true when the SED and every available ROI summary exist."""
     for roi in available_case_rois(case):
-        roi_complete = _outputs_complete(case_outputs(case, roi=roi))
-        legacy_full_complete = roi == "full" and _outputs_complete(case_outputs(case))
+        roi_complete = _outputs_complete(case_outputs(case, roi=roi), sed_path=case.baseline_sed_path)
+        legacy_full_complete = roi == "full" and _outputs_complete(case_outputs(case), sed_path=case.baseline_sed_path)
         if not (roi_complete or legacy_full_complete):
             return False
     return True
@@ -43,13 +44,33 @@ def _case_outputs_complete(case: TimelapseCase) -> bool:
 
 def _assert_same_grid(reference: sitk.Image, candidate: sitk.Image, *, name: str) -> None:
     """Raise when two images cannot be compared voxel-by-voxel."""
+    if _same_grid(reference, candidate):
+        return
+    raise ValueError(f"{name} does not share the remodelling image grid")
+
+
+def _same_grid(reference: sitk.Image, candidate: sitk.Image) -> bool:
+    """Return true when two images share voxel indexing and physical metadata."""
     if (
-        reference.GetSize() != candidate.GetSize()
-        or reference.GetSpacing() != candidate.GetSpacing()
-        or reference.GetOrigin() != candidate.GetOrigin()
-        or reference.GetDirection() != candidate.GetDirection()
+        reference.GetSize() == candidate.GetSize()
+        and reference.GetSpacing() == candidate.GetSpacing()
+        and reference.GetOrigin() == candidate.GetOrigin()
+        and reference.GetDirection() == candidate.GetDirection()
     ):
-        raise ValueError(f"{name} does not share the remodelling image grid")
+        return True
+    return False
+
+
+def _nearest_mask_on_grid(mask: sitk.Image, reference: sitk.Image) -> sitk.Image:
+    """Resample a binary ROI mask onto the remodelling image grid."""
+    return sitk.Resample(
+        sitk.Cast(mask > 0, sitk.sitkUInt8),
+        reference,
+        sitk.Transform(3, sitk.sitkIdentity),
+        sitk.sitkNearestNeighbor,
+        0,
+        sitk.sitkUInt8,
+    )
 
 
 def _binary_array(path: Path, *, reference: sitk.Image, name: str) -> np.ndarray:
@@ -103,6 +124,8 @@ def _read_analysis_mask(mask_path: Path | None, remodelling_image: sitk.Image, *
     if mask_path is None:
         return None
     mask = sitk.ReadImage(str(mask_path))
+    if not _same_grid(remodelling_image, mask):
+        mask = _nearest_mask_on_grid(mask, remodelling_image)
     _assert_same_grid(remodelling_image, mask, name=f"{roi} analysis mask")
     return mask
 
@@ -121,7 +144,11 @@ def _run_case(
     outputs = case_outputs(case)
     outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
 
-    if (overwrite and not reanalyze) or not outputs["sed"].exists():
+    sed_path = case.baseline_sed_path if case.baseline_sed_path and Path(case.baseline_sed_path).exists() else outputs["sed"]
+    if case.baseline_sed_path and Path(case.baseline_sed_path).exists():
+        if verbose:
+            print(f"[mechanoregulation] {case.case_id}: reusing matched FEA SED {case.baseline_sed_path}")
+    elif (overwrite and not reanalyze) or not outputs["sed"].exists():
         if verbose:
             print(f"[mechanoregulation] {case.case_id}: writing baseline material labels")
         material_path = _write_baseline_material_labels(case, outputs["material"])
@@ -133,13 +160,14 @@ def _run_case(
             profile=profile,
             debug_dir=outputs["parosol_solve_dir"],
         )
+        sed_path = outputs["sed"]
         if verbose:
             print(f"[mechanoregulation] {case.case_id}: wrote {outputs['sed']}")
     elif verbose:
         print(f"[mechanoregulation] {case.case_id}: reusing existing baseline SED {outputs['sed']}")
 
     remodelling_img = sitk.ReadImage(str(case.remodelling_image_path))
-    baseline_sed_img = sitk.ReadImage(str(outputs["sed"]))
+    baseline_sed_img = sitk.ReadImage(str(sed_path))
     for roi, mask_path in available_case_rois(case).items():
         roi_outputs = case_outputs(case, roi=roi)
         if verbose:
@@ -156,7 +184,7 @@ def _run_case(
             n_boot=int(n_boot),
             bootstrap_sampling_perc=float(bootstrap_sampling_perc),
             surface_event_mapping="surface_dilation_resorption_wins",
-            odds_model="clipped_sed_unit",
+            odds_model="normalized_percent",
             resorption_or_definition="decreasing_strain",
             return_full=True,
             plot=True,
@@ -273,7 +301,7 @@ def run_post_timelapse_mechanoregulation(
         A small summary dictionary with discovered/processed/skipped/failed
         counts. The CLI formats this for terminal output.
     """
-    cases = discover_timelapse_cases(dataset_root)
+    cases = discover_timelapse_cases(dataset_root, sed_profile=profile)
     if case_id:
         cases = [case for case in cases if case.case_id == str(case_id)]
     summary: dict[str, Any] = {

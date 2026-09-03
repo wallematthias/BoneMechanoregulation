@@ -1,5 +1,9 @@
 # BoneMechanoregulation
 
+<p align="center">
+  <img src="docs/assets/bone-mechanoregulation-icon.png" alt="BoneMechanoregulation icon" width="160">
+</p>
+
 Post-timelapse mechanoregulation analysis for HR-pQCT datasets.
 
 This package is a downstream addon. Run `TimelapsedHRpQCT` first, then run

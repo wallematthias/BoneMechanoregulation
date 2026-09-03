@@ -9,6 +9,7 @@ import SimpleITK as sitk
 
 from bonemechreg.timelapse import case_outputs, discover_timelapse_cases
 from bonemechreg.post_timelapse import (
+    _read_analysis_mask,
     run_post_timelapse_case,
     run_post_timelapse_mechanoregulation,
 )
@@ -33,6 +34,24 @@ def _make_case_fixture(tmp_path: Path):
     _write_image(remodelling, value=2)
     _write_image(baseline, value=1)
     return root, discover_timelapse_cases(root)[0]
+
+
+def test_read_analysis_mask_resamples_to_remodelling_grid(tmp_path: Path) -> None:
+    remodelling = sitk.GetImageFromArray(np.zeros((2, 2, 2), dtype=np.uint8))
+    remodelling.SetSpacing((0.08, 0.08, 0.08))
+    mask = sitk.GetImageFromArray(np.ones((4, 4, 4), dtype=np.uint8))
+    mask.SetSpacing((0.08, 0.08, 0.08))
+    mask_path = tmp_path / "full_mask.nii.gz"
+    sitk.WriteImage(mask, str(mask_path))
+
+    aligned = _read_analysis_mask(mask_path, remodelling, roi="full")
+
+    assert aligned is not None
+    assert aligned.GetSize() == remodelling.GetSize()
+    assert aligned.GetSpacing() == remodelling.GetSpacing()
+    assert aligned.GetOrigin() == remodelling.GetOrigin()
+    assert aligned.GetDirection() == remodelling.GetDirection()
+    assert np.all(sitk.GetArrayFromImage(aligned) == 1)
 
 
 def test_run_cases_reuses_existing_sed_when_summary_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -122,6 +141,59 @@ def test_verbose_run_reports_existing_sed_reuse(
     run_post_timelapse_mechanoregulation(dataset_root=root, profile="XtremeCTII", verbose=True)
 
     assert "reusing existing baseline SED" in capsys.readouterr().out
+
+
+def test_run_cases_reuses_matched_fea_sed_without_copying_or_solving(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, case = _make_case_fixture(tmp_path)
+    external_sed = root / "derivatives" / "FEA" / "sub-001" / "ses-C1" / "xct" / "maps" / "sed.nii.gz"
+    _write_image(external_sed, value=4)
+    case = type(case)(
+        **{
+            **case.__dict__,
+            "baseline_sed_path": external_sed,
+        }
+    )
+    outputs = case_outputs(case)
+
+    class FakeResult:
+        orf = 2.0
+        orr = 0.5
+        orf_ci = (1.5, 2.5)
+        orr_ci = (0.25, 0.75)
+        orr_increasing_strain = 0.5
+        orr_decreasing_strain = 2.0
+        orr_increasing_strain_ci = (0.25, 0.75)
+        orr_decreasing_strain_ci = (1.3333333333333333, 4.0)
+        pvalue_form = 0.01
+        pvalue_res = 0.02
+        conditional_curves = {"F": {"mean": [0.1]}, "R": {"mean": [0.2]}, "Q": {"mean": [0.7]}, "support": [0.1]}
+        binned_odds_diagnostics = {}
+        sample_counts = {"n_sampled_voxels": 10}
+        settings = {"profile": "XtremeCTII"}
+        plot_paths = {"conditional_curves": outputs["curves"]}
+
+    def fail_solve(**kwargs):
+        raise AssertionError("matched FEA SED should be reused")
+
+    def fake_mechreg(**kwargs):
+        sed_values = sitk.GetArrayFromImage(kwargs["baseline_strain"])
+        assert np.all(sed_values == 4)
+        outputs["curves"].write_bytes(b"plot")
+        return FakeResult()
+
+    monkeypatch.setattr("bonemechreg.post_timelapse.solve_sed_to_file", fail_solve)
+    monkeypatch.setattr("bonemechreg.post_timelapse.mechanoregulation", fake_mechreg)
+
+    summary = run_post_timelapse_case(case, profile="XtremeCTII", verbose=True)
+
+    assert summary["processed"] == 1
+    assert "reusing matched FEA SED" in capsys.readouterr().out
+    assert not outputs["sed"].exists()
+    assert outputs["csv"].exists()
 
 
 def test_run_cases_builds_material_labels_from_native_baseline_segmentation(
@@ -253,7 +325,7 @@ def test_run_cases_analyzes_available_timelapse_rois_without_resolving_sed(
         roi_name = kwargs["run_name"].split("_roi-")[-1]
         analyzed_rois.append(roi_name)
         assert kwargs["surface_event_mapping"] == "surface_dilation_resorption_wins"
-        assert kwargs["odds_model"] == "clipped_sed_unit"
+        assert kwargs["odds_model"] == "normalized_percent"
         return FakeResult()
 
     monkeypatch.setattr("bonemechreg.post_timelapse.solve_sed_to_file", fail_solve)
