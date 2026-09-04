@@ -79,7 +79,8 @@ def test_run_case_resamples_matched_sed_to_remodelling_grid(
         baseline_sed_path=sed,
         full_mask_path=None,
     )
-    outputs = case_outputs(case)
+    outputs = case_outputs(case, roi="full")
+    sed_outputs = case_outputs(case)
 
     class FakeResult:
         orf = 2.0
@@ -96,6 +97,7 @@ def test_run_case_resamples_matched_sed_to_remodelling_grid(
         binned_odds_diagnostics = {}
         sample_counts = {"n_sampled_voxels": 10}
         settings = {"profile": "XtremeCTII"}
+        surface_event_image = np.full((2, 2, 2), 3, dtype=np.uint8)
         plot_paths = {"conditional_curves": outputs["curves"]}
 
     def fake_mechreg(**kwargs):
@@ -110,6 +112,9 @@ def test_run_case_resamples_matched_sed_to_remodelling_grid(
     summary = run_post_timelapse_case(case, profile="XtremeCTII", verbose=True)
 
     assert summary["processed"] == 1
+    surface_image = sitk.ReadImage(str(outputs["surface_events"]))
+    assert surface_image.GetSize() == sitk.ReadImage(str(remodelling)).GetSize()
+    assert set(np.unique(sitk.GetArrayFromImage(surface_image))) == {3}
 
 
 def test_run_case_preserves_index_aligned_sed_when_physical_metadata_differs(
@@ -154,6 +159,7 @@ def test_run_case_preserves_index_aligned_sed_when_physical_metadata_differs(
         binned_odds_diagnostics = {}
         sample_counts = {"n_sampled_voxels": 10}
         settings = {"profile": "XtremeCTII"}
+        surface_event_image = np.full((3, 3, 3), 1, dtype=np.uint8)
         plot_paths = {"conditional_curves": outputs["curves"]}
 
     def fake_mechreg(**kwargs):
@@ -170,6 +176,9 @@ def test_run_case_preserves_index_aligned_sed_when_physical_metadata_differs(
     summary = run_post_timelapse_case(case, profile="XtremeCTII", verbose=True)
 
     assert summary["processed"] == 1
+    surface_image = sitk.ReadImage(str(outputs["surface_events"]))
+    assert surface_image.GetOrigin() == remodelling_image.GetOrigin()
+    assert surface_image.GetDirection() == remodelling_image.GetDirection()
 
 
 def test_run_cases_reuses_existing_sed_when_summary_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -581,6 +590,7 @@ def test_run_cases_skips_complete_outputs(tmp_path: Path, monkeypatch: pytest.Mo
     outputs["csv"].write_text("ok\n", encoding="utf-8")
     outputs["curves"].write_bytes(b"plot")
     outputs["schulte_curves"].write_bytes(b"plot")
+    outputs["surface_events"].write_bytes(b"surface")
 
     def fail_solve(**kwargs):
         raise AssertionError("solve should not run")
@@ -603,6 +613,7 @@ def test_reanalyze_reruns_complete_case_without_overwrite(tmp_path: Path, monkey
     outputs["csv"].write_text("ok\n", encoding="utf-8")
     outputs["curves"].write_bytes(b"plot")
     outputs["schulte_curves"].write_bytes(b"plot")
+    outputs["surface_events"].write_bytes(b"surface")
     called = {"reanalyze": None}
 
     def fake_run_case(case_arg, profile, overwrite, *, reanalyze=False, n_boot=100, bootstrap_sampling_perc=100.0, verbose=False):

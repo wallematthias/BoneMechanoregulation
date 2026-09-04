@@ -20,6 +20,20 @@ from bonemechreg.results import write_mechanoregulation_summary, write_mechanore
 from bonemechreg.parosol import solve_sed_to_file
 
 
+def _write_surface_event_image(result: Any, reference: sitk.Image, output_path: Path) -> None:
+    """Write analysed formation/resorption surface labels on the reference grid."""
+    surface = getattr(result, "surface_event_image", None)
+    if surface is None:
+        return
+    arr_xyz = np.asarray(surface, dtype=np.uint8)
+    if arr_xyz.shape != tuple(reference.GetSize()):
+        raise ValueError("surface_event_image shape must match remodelling image grid")
+    image = sitk.GetImageFromArray(np.transpose(arr_xyz, (2, 1, 0)))
+    image.CopyInformation(reference)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    sitk.WriteImage(image, str(output_path))
+
+
 def _outputs_complete(outputs: dict[str, Path], *, sed_path: Path | None = None) -> bool:
     """Return true when all expected files for one ROI already exist."""
     sed_complete = bool(sed_path is not None and Path(sed_path).exists()) or outputs["sed"].exists()
@@ -27,6 +41,7 @@ def _outputs_complete(outputs: dict[str, Path], *, sed_path: Path | None = None)
         sed_complete
         and outputs["summary"].exists()
         and outputs["csv"].exists()
+        and outputs["surface_events"].exists()
         and outputs["curves"].exists()
         and outputs["schulte_curves"].exists()
     )
@@ -221,8 +236,11 @@ def _run_case(
             roi=roi,
         )
         write_mechanoregulation_summary_csv(result, roi_outputs["csv"])
+        _write_surface_event_image(result, remodelling_img, roi_outputs["surface_events"])
         if verbose:
             print(f"[mechanoregulation] {case.case_id}: wrote {roi_outputs['csv']}")
+            if roi_outputs["surface_events"].exists():
+                print(f"[mechanoregulation] {case.case_id}: wrote {roi_outputs['surface_events']}")
 
 
 def run_post_timelapse_case(

@@ -109,7 +109,7 @@ def test_surface_dilated_event_extraction_geometry() -> None:
     remodelling[0, 0, 0] = 1
     strain = np.ones((3, 3, 3), dtype=np.float32)
 
-    labels, _strain, counts = mechreg_module._extract_surface_dilated_events(
+    labels, _strain, counts, surface = mechreg_module._extract_surface_dilated_events(
         remodelling,
         strain,
         resorption_label=1,
@@ -122,6 +122,10 @@ def test_surface_dilated_event_extraction_geometry() -> None:
     assert counts["n_sampled_voxels"] == 25
     assert np.count_nonzero(labels == 3) == 6
     assert np.count_nonzero(labels == 1) == 3
+    assert surface.shape == remodelling.shape
+    assert set(np.unique(surface)) <= {0, 1, 3}
+    assert np.count_nonzero(surface == 3) == 6
+    assert np.count_nonzero(surface == 1) == 3
     assert counts["surface_event_mapping"] == "symmetric_surface_cancel_overlap"
 
 
@@ -138,6 +142,14 @@ def test_mechanoregulation_requires_baseline_sed() -> None:
 
     with pytest.raises(ValueError, match="baseline_strain is required"):
         mechanoregulation(remodelling_image=remodelling, baseline_strain=None)
+
+
+def test_mechanoregulation_reports_sampling_counts_when_too_few_voxels() -> None:
+    remodelling = np.asarray([[[3]]], dtype=np.int16)
+    baseline = np.ones(remodelling.shape, dtype=np.float32)
+
+    with pytest.raises(ValueError, match=r"not enough sampled voxels.*n_sampled_voxels="):
+        mechanoregulation(remodelling_image=remodelling, baseline_strain=baseline)
 
 
 def test_derive_remodelling_labels_requires_binary_flip_and_density_change() -> None:
@@ -342,7 +354,7 @@ def test_mechanoregulation_analysis_mask_limits_surface_sampling() -> None:
     mask = np.zeros_like(remodelling, dtype=np.uint8)
     mask[:3, :3, :3] = 1
 
-    labels, _strain, counts = mechreg_module._extract_surface_dilated_events(
+    labels, _strain, counts, surface = mechreg_module._extract_surface_dilated_events(
         remodelling,
         baseline,
         mask_xyz=mask,
@@ -367,7 +379,7 @@ def test_formation_events_are_projected_to_baseline_surface() -> None:
     remodelling[0, 2, 2] = 3
     strain[0, 2, 2] = 0.001
 
-    labels, sampled_strain, counts = mechreg_module._extract_surface_dilated_events(
+    labels, sampled_strain, counts, surface = mechreg_module._extract_surface_dilated_events(
         remodelling,
         strain,
         resorption_label=1,
@@ -387,7 +399,7 @@ def test_symmetric_projection_excludes_direct_resorption_voxels() -> None:
     remodelling[0, 2, 2] = 1
     strain[0, 2, 2] = 0.001
 
-    labels, sampled_strain, counts = mechreg_module._extract_surface_dilated_events(
+    labels, sampled_strain, counts, surface = mechreg_module._extract_surface_dilated_events(
         remodelling,
         strain,
         resorption_label=1,
@@ -406,7 +418,7 @@ def test_overlapping_projected_events_cancel_to_quiescence() -> None:
     remodelling[0, 2, 1] = 1
     remodelling[0, 2, 3] = 3
 
-    labels, _sampled_strain, counts = mechreg_module._extract_surface_dilated_events(
+    labels, _sampled_strain, counts, surface = mechreg_module._extract_surface_dilated_events(
         remodelling,
         strain,
         resorption_label=1,
@@ -426,7 +438,7 @@ def test_surface_dilation_resorption_wins_samples_all_sed_surface_and_resorption
     remodelling[0, 2, 1] = 1
     remodelling[0, 2, 3] = 3
 
-    labels, _sampled_strain, counts = mechreg_module._extract_surface_dilated_events(
+    labels, _sampled_strain, counts, surface = mechreg_module._extract_surface_dilated_events(
         remodelling,
         strain,
         resorption_label=1,
@@ -439,6 +451,8 @@ def test_surface_dilation_resorption_wins_samples_all_sed_surface_and_resorption
     assert counts["surface_event_mapping"] == "surface_dilation_resorption_wins"
     assert counts["n_surface_voxels"] == 98
     assert counts["n_resorption_wins_overlap"] == 1
+    assert surface.shape == remodelling.shape
+    assert set(np.unique(surface)) <= {0, 1, 3}
     assert np.count_nonzero(labels == 1) == 5
     assert np.count_nonzero(labels == 3) == 4
 

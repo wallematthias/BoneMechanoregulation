@@ -506,6 +506,7 @@ def case_outputs(case: TimelapseCase, *, roi: str | None = None) -> dict[str, Pa
         "sed": case.output_dir / f"{stem}_sed.nii.gz",
         "summary": case.output_dir / f"{analysis_stem}_mechanoregulation_summary.json",
         "csv": case.output_dir / f"{analysis_stem}_mechanoregulation_summary.csv",
+        "surface_events": case.output_dir / f"{analysis_stem}_surface-events.nii.gz",
         "curves": case.output_dir / f"{analysis_stem}_conditional_curves.png",
         "schulte_curves": case.output_dir / f"{analysis_stem}_schulte_binned_curves.png",
         "mechanoregulation_run_dir": mechanoregulation_run_dir,

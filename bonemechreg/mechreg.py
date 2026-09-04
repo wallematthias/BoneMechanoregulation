@@ -53,6 +53,9 @@ class MechanoregulationResult:
         binned_odds_diagnostics: Bin-wise class enrichment diagnostics.
         sample_counts: Counts after symmetric surface projection.
         settings: Analysis parameters written to JSON output.
+        surface_event_image: Label image on the sampled analysis surface where
+            ``1=resorption`` and ``3=formation``. Quiescent and unsampled voxels
+            are stored as zero so display overlays show only analysed events.
         plot_paths: Optional paths written by the internal plotting helper.
     """
 
@@ -70,6 +73,7 @@ class MechanoregulationResult:
     binned_odds_diagnostics: dict[str, Any]
     sample_counts: dict[str, int]
     settings: dict[str, Any]
+    surface_event_image: np.ndarray | None = None
     plot_paths: dict[str, Path] | None = None
 
 
@@ -651,7 +655,7 @@ def _extract_surface_dilated_events(
     formation_label: int,
     cap_percentile: float,
     surface_event_mapping: str = "symmetric_surface_cancel_overlap",
-) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+) -> tuple[np.ndarray, np.ndarray, dict[str, int], np.ndarray]:
     """Return event labels and SED sampled on the baseline bone surface.
 
     Formation and resorption are first identified in the remodelling label
@@ -703,7 +707,7 @@ def _extract_surface_dilated_events(
             "n_formation": 0,
             "n_resorption": 0,
             "n_quiescence": 0,
-        }
+        }, np.zeros(remodelling_xyz.shape, dtype=np.uint8)
 
     # Cap extreme SED values before normalization. This keeps a few numerical
     # outliers from compressing the biologically relevant 0-100% axis.
@@ -736,6 +740,9 @@ def _extract_surface_dilated_events(
 
     sampled_strain = strain[sample_mask]
     sampled_events = sampled_labels[sample_mask]
+    surface_event_image = np.zeros(remodelling_xyz.shape, dtype=np.uint8)
+    surface_event_image[sample_mask & (sampled_labels == int(resorption_label))] = int(resorption_label)
+    surface_event_image[sample_mask & (sampled_labels == int(formation_label))] = int(formation_label)
 
     counts = {
         "n_eval_voxels": int(np.count_nonzero(eval_mask)),
@@ -747,7 +754,7 @@ def _extract_surface_dilated_events(
         "n_cancelled_overlap": int(np.count_nonzero(both)),
         "surface_event_mapping": "symmetric_surface_cancel_overlap",
     }
-    return sampled_events, sampled_strain, counts
+    return sampled_events, sampled_strain, counts, surface_event_image
 
 
 def _normalize_surface_event_mapping(value: str) -> str:
@@ -775,7 +782,7 @@ def _extract_surface_dilation_resorption_wins_events(
     quiescence_label: int,
     formation_label: int,
     cap_percentile: float,
-) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+) -> tuple[np.ndarray, np.ndarray, dict[str, int], np.ndarray]:
     """Return surface labels by dilating events and letting resorption win overlap.
 
     This method samples every SED-positive surface voxel inside the mask, then
@@ -801,7 +808,7 @@ def _extract_surface_dilation_resorption_wins_events(
             "n_resorption": 0,
             "n_quiescence": 0,
             "surface_event_mapping": "surface_dilation_resorption_wins",
-        }
+        }, np.zeros(remodelling_xyz.shape, dtype=np.uint8)
 
     strain = strain_xyz.astype(np.float64, copy=True)
     strain[~eval_mask] = 0.0
@@ -820,6 +827,9 @@ def _extract_surface_dilation_resorption_wins_events(
     both = bone_surface & form_dil & res_dil
     sampled_strain = strain[bone_surface]
     sampled_events = sampled_labels[bone_surface]
+    surface_event_image = np.zeros(remodelling_xyz.shape, dtype=np.uint8)
+    surface_event_image[bone_surface & (sampled_labels == int(resorption_label))] = int(resorption_label)
+    surface_event_image[bone_surface & (sampled_labels == int(formation_label))] = int(formation_label)
 
     counts = {
         "n_eval_voxels": int(np.count_nonzero(eval_mask)),
@@ -832,7 +842,7 @@ def _extract_surface_dilation_resorption_wins_events(
         "n_resorption_wins_overlap": int(np.count_nonzero(both)),
         "surface_event_mapping": "surface_dilation_resorption_wins",
     }
-    return sampled_events, sampled_strain, counts
+    return sampled_events, sampled_strain, counts, surface_event_image
 
 
 def _curve_from_models(strain_support: np.ndarray, beta_form: np.ndarray, beta_res: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1159,7 +1169,7 @@ def mechanoregulation(
     baseline_source = "provided_baseline"
 
     # Step 3: legacy-consistent event extraction from surface-dilated labels.
-    labels, strain, counts = _extract_surface_dilated_events(
+    labels, strain, counts, surface_event_image = _extract_surface_dilated_events(
         remodelling_xyz,
         strain_xyz,
         mask_xyz=mask_xyz,
@@ -1170,7 +1180,8 @@ def mechanoregulation(
         surface_event_mapping=surface_event_mapping,
     )
     if strain.size < 3:
-        raise ValueError("not enough sampled voxels for mechanoregulation analysis")
+        detail = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
+        raise ValueError(f"not enough sampled voxels for mechanoregulation analysis ({detail})")
     if legacy_clip_to_unit:
         strain = np.minimum(strain, 1.0)
 
@@ -1403,6 +1414,7 @@ def mechanoregulation(
         binned_odds_diagnostics=binned,
         sample_counts=counts,
         settings=settings,
+        surface_event_image=surface_event_image,
         plot_paths=plot_paths,
     )
 
