@@ -136,7 +136,8 @@ def test_run_case_preserves_index_aligned_sed_when_physical_metadata_differs(
         baseline_sed_path=sed,
         full_mask_path=None,
     )
-    outputs = case_outputs(case)
+    outputs = case_outputs(case, roi="full")
+    sed_outputs = case_outputs(case)
 
     class FakeResult:
         orf = 2.0
@@ -173,14 +174,15 @@ def test_run_case_preserves_index_aligned_sed_when_physical_metadata_differs(
 
 def test_run_cases_reuses_existing_sed_when_summary_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, case = _make_case_fixture(tmp_path)
-    outputs = case_outputs(case)
-    outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
-    _write_image(outputs["sed"], value=3)
+    outputs = case_outputs(case, roi="full")
+    sed_outputs = case_outputs(case)
+    sed_outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
+    _write_image(sed_outputs["sed"], value=3)
     called = {"solve": 0, "analyze": 0}
 
     def fake_solve(**kwargs):
         called["solve"] += 1
-        return outputs["sed"]
+        return sed_outputs["sed"]
 
     class FakeResult:
         orf = 2.0
@@ -223,9 +225,10 @@ def test_verbose_run_reports_existing_sed_reuse(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     root, case = _make_case_fixture(tmp_path)
-    outputs = case_outputs(case)
-    outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
-    _write_image(outputs["sed"], value=3)
+    outputs = case_outputs(case, roi="full")
+    sed_outputs = case_outputs(case)
+    sed_outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
+    _write_image(sed_outputs["sed"], value=3)
 
     class FakeResult:
         orf = 2.0
@@ -274,7 +277,8 @@ def test_run_cases_reuses_matched_fea_sed_without_copying_or_solving(
             "baseline_sed_path": external_sed,
         }
     )
-    outputs = case_outputs(case)
+    outputs = case_outputs(case, roi="full")
+    sed_outputs = case_outputs(case)
 
     class FakeResult:
         orf = 2.0
@@ -309,7 +313,7 @@ def test_run_cases_reuses_matched_fea_sed_without_copying_or_solving(
 
     assert summary["processed"] == 1
     assert "reusing matched FEA SED" in capsys.readouterr().out
-    assert not outputs["sed"].exists()
+    assert not sed_outputs["sed"].exists()
     assert outputs["csv"].exists()
 
 
@@ -413,9 +417,10 @@ def test_run_cases_analyzes_available_timelapse_rois_without_resolving_sed(
     _write_array(cort, cort_values)
 
     case = discover_timelapse_cases(root)[0]
-    outputs = case_outputs(case)
-    outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
-    _write_image(outputs["sed"], value=3)
+    outputs = case_outputs(case, roi="full")
+    sed_outputs = case_outputs(case)
+    sed_outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
+    _write_image(sed_outputs["sed"], value=3)
     analyzed_rois = []
 
     class FakeResult:
@@ -568,9 +573,10 @@ def test_run_post_timelapse_case_passes_configured_bootstrap_count(
 
 def test_run_cases_skips_complete_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, case = _make_case_fixture(tmp_path)
-    outputs = case_outputs(case)
-    outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
-    _write_image(outputs["sed"], value=3)
+    outputs = case_outputs(case, roi="full")
+    sed_outputs = case_outputs(case)
+    sed_outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
+    _write_image(sed_outputs["sed"], value=3)
     outputs["summary"].write_text(json.dumps({"ok": True}), encoding="utf-8")
     outputs["csv"].write_text("ok\n", encoding="utf-8")
     outputs["curves"].write_bytes(b"plot")
@@ -589,9 +595,10 @@ def test_run_cases_skips_complete_outputs(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_reanalyze_reruns_complete_case_without_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, case = _make_case_fixture(tmp_path)
-    outputs = case_outputs(case)
-    outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
-    _write_image(outputs["sed"], value=3)
+    outputs = case_outputs(case, roi="full")
+    sed_outputs = case_outputs(case)
+    sed_outputs["sed"].parent.mkdir(parents=True, exist_ok=True)
+    _write_image(sed_outputs["sed"], value=3)
     outputs["summary"].write_text(json.dumps({"ok": True}), encoding="utf-8")
     outputs["csv"].write_text("ok\n", encoding="utf-8")
     outputs["curves"].write_bytes(b"plot")

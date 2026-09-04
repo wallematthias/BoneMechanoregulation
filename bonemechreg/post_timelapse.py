@@ -35,9 +35,7 @@ def _outputs_complete(outputs: dict[str, Path], *, sed_path: Path | None = None)
 def _case_outputs_complete(case: TimelapseCase) -> bool:
     """Return true when the SED and every available ROI summary exist."""
     for roi in available_case_rois(case):
-        roi_complete = _outputs_complete(case_outputs(case, roi=roi), sed_path=case.baseline_sed_path)
-        legacy_full_complete = roi == "full" and _outputs_complete(case_outputs(case), sed_path=case.baseline_sed_path)
-        if not (roi_complete or legacy_full_complete):
+        if not _outputs_complete(case_outputs(case, roi=roi), sed_path=case.baseline_sed_path):
             return False
     return True
 
@@ -223,22 +221,6 @@ def _run_case(
             roi=roi,
         )
         write_mechanoregulation_summary_csv(result, roi_outputs["csv"])
-        if roi == "full":
-            # Preserve the historical unsuffixed table/plot names for older
-            # scripts while making the new ROI-scoped files first-class.
-            write_mechanoregulation_summary(
-                case=case,
-                profile=profile,
-                result=result,
-                output_path=outputs["summary"],
-                roi=roi,
-            )
-            write_mechanoregulation_summary_csv(result, outputs["csv"])
-            for source_key in ("curves", "schulte_curves"):
-                source = roi_outputs[source_key]
-                target = outputs[source_key]
-                if source.exists() and source != target:
-                    target.write_bytes(source.read_bytes())
         if verbose:
             print(f"[mechanoregulation] {case.case_id}: wrote {roi_outputs['csv']}")
 
