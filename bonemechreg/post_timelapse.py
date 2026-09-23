@@ -87,8 +87,14 @@ def _nearest_mask_on_grid(mask: sitk.Image, reference: sitk.Image) -> sitk.Image
 
 
 def _linear_scalar_on_grid(image: sitk.Image, reference: sitk.Image) -> sitk.Image:
-    """Resample a scalar image onto the remodelling image grid."""
-    if image.GetSize() == reference.GetSize() and np.allclose(image.GetSpacing(), reference.GetSpacing()):
+    """Align a scalar image to the remodelling grid without smoothing same-sampling data."""
+    same_sampling = image.GetSize() == reference.GetSize() and np.allclose(
+        image.GetSpacing(),
+        reference.GetSpacing(),
+        rtol=1e-4,
+        atol=1e-6,
+    )
+    if same_sampling:
         aligned = sitk.GetImageFromArray(sitk.GetArrayFromImage(image).astype(np.float32, copy=False))
         aligned.CopyInformation(reference)
         return aligned

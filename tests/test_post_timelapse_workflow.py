@@ -142,7 +142,6 @@ def test_run_case_preserves_index_aligned_sed_when_physical_metadata_differs(
         full_mask_path=None,
     )
     outputs = case_outputs(case, roi="full")
-    sed_outputs = case_outputs(case)
 
     class FakeResult:
         orf = 2.0
@@ -324,6 +323,29 @@ def test_run_cases_reuses_matched_fea_sed_without_copying_or_solving(
     assert "reusing matched FEA SED" in capsys.readouterr().out
     assert not sed_outputs["sed"].exists()
     assert outputs["csv"].exists()
+
+
+def test_scalar_alignment_preserves_index_aligned_values_with_nifti_spacing_drift() -> None:
+    from bonemechreg.post_timelapse import _linear_scalar_on_grid
+
+    source = sitk.Image(4, 4, 4, sitk.sitkFloat32)
+    source.SetSpacing((0.0606999993, 0.0606999993, 0.0606999993))
+    source.SetOrigin((-566.0, -465.0, 0.0))
+    source.SetDirection((-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0))
+    source[1, 1, 1] = 7.0
+
+    reference = sitk.Image(4, 4, 4, sitk.sitkUInt8)
+    # NIfTI round-tripping can introduce a few microns of spacing drift even
+    # when two volumes retain the same index sampling.
+    reference.SetSpacing((0.0606996529, 0.0606996529, 0.0606964305))
+    reference.SetOrigin((46.412, 38.130, 0.0))
+    reference.SetDirection((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+
+    aligned = _linear_scalar_on_grid(source, reference)
+
+    assert aligned.GetOrigin() == reference.GetOrigin()
+    assert aligned.GetDirection() == reference.GetDirection()
+    assert float(sitk.GetArrayFromImage(aligned).sum()) == 7.0
 
 
 def test_run_cases_builds_material_labels_from_native_baseline_segmentation(
