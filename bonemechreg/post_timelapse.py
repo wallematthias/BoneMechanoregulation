@@ -86,6 +86,70 @@ def _nearest_mask_on_grid(mask: sitk.Image, reference: sitk.Image) -> sitk.Image
     )
 
 
+def _exact_scalar_on_grid(image: sitk.Image, reference: sitk.Image) -> sitk.Image | None:
+    """Place a scalar image on a compatible reference lattice without interpolation."""
+    image_direction = np.asarray(image.GetDirection(), dtype=float).reshape((3, 3))
+    reference_direction = np.asarray(reference.GetDirection(), dtype=float).reshape((3, 3))
+    image_basis = image_direction @ np.diag(np.asarray(image.GetSpacing(), dtype=float))
+    reference_basis = reference_direction @ np.diag(np.asarray(reference.GetSpacing(), dtype=float))
+    index_transform = np.linalg.solve(reference_basis, image_basis)
+    signed_permutation = np.rint(index_transform).astype(np.int64)
+    if not (
+        np.allclose(index_transform, signed_permutation, rtol=0.0, atol=1e-4)
+        and np.all(np.sum(np.abs(signed_permutation), axis=0) == 1)
+        and np.all(np.sum(np.abs(signed_permutation), axis=1) == 1)
+    ):
+        return None
+
+    continuous_origin = np.asarray(
+        reference.TransformPhysicalPointToContinuousIndex(image.GetOrigin()),
+        dtype=float,
+    )
+    origin_index = np.rint(continuous_origin).astype(np.int64)
+    if not np.allclose(continuous_origin, origin_index, rtol=0.0, atol=1e-3):
+        return None
+
+    image_size = np.asarray(image.GetSize(), dtype=np.int64)
+    source_axes = np.argmax(np.abs(signed_permutation), axis=1)
+    signs = signed_permutation[np.arange(3), source_axes]
+    lower = origin_index.copy()
+    for reference_axis, (image_axis, sign) in enumerate(zip(source_axes, signs)):
+        if sign < 0:
+            lower[reference_axis] -= image_size[image_axis] - 1
+
+    oriented_shape = image_size[source_axes]
+    upper = lower + oriented_shape
+    reference_size = np.asarray(reference.GetSize(), dtype=np.int64)
+    destination_start = np.maximum(lower, 0)
+    destination_stop = np.minimum(upper, reference_size)
+
+    image_xyz = np.transpose(
+        sitk.GetArrayFromImage(image).astype(np.float32, copy=False),
+        (2, 1, 0),
+    )
+    oriented_xyz = np.transpose(image_xyz, tuple(int(axis) for axis in source_axes))
+    for axis, sign in enumerate(signs):
+        if sign < 0:
+            oriented_xyz = np.flip(oriented_xyz, axis=axis)
+
+    restored_xyz = np.zeros(tuple(int(value) for value in reference_size), dtype=np.float32)
+    if np.all(destination_start < destination_stop):
+        source_start = destination_start - lower
+        source_stop = destination_stop - lower
+        destination_slices = tuple(
+            slice(int(start), int(stop))
+            for start, stop in zip(destination_start, destination_stop)
+        )
+        source_slices = tuple(
+            slice(int(start), int(stop)) for start, stop in zip(source_start, source_stop)
+        )
+        restored_xyz[destination_slices] = oriented_xyz[source_slices]
+
+    restored = sitk.GetImageFromArray(np.transpose(restored_xyz, (2, 1, 0)))
+    restored.CopyInformation(reference)
+    return restored
+
+
 def _linear_scalar_on_grid(image: sitk.Image, reference: sitk.Image) -> sitk.Image:
     """Align a scalar image to the remodelling grid without smoothing same-sampling data."""
     same_sampling = image.GetSize() == reference.GetSize() and np.allclose(
@@ -97,6 +161,9 @@ def _linear_scalar_on_grid(image: sitk.Image, reference: sitk.Image) -> sitk.Ima
     if same_sampling:
         aligned = sitk.GetImageFromArray(sitk.GetArrayFromImage(image).astype(np.float32, copy=False))
         aligned.CopyInformation(reference)
+        return aligned
+    aligned = _exact_scalar_on_grid(image, reference)
+    if aligned is not None:
         return aligned
     return sitk.Resample(
         sitk.Cast(image, sitk.sitkFloat32),

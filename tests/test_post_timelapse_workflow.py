@@ -348,6 +348,38 @@ def test_scalar_alignment_preserves_index_aligned_values_with_nifti_spacing_drif
     assert float(sitk.GetArrayFromImage(aligned).sum()) == 7.0
 
 
+def test_scalar_alignment_places_smaller_sed_by_physical_geometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bonemechreg.post_timelapse import _linear_scalar_on_grid
+
+    reference = sitk.Image((6, 7, 8), sitk.sitkUInt8)
+    reference.SetSpacing((0.082, 0.082, 0.082))
+    reference.SetOrigin((46.0, 38.0, 0.0))
+    reference.SetDirection((-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+
+    source = sitk.Image((2, 3, 4), sitk.sitkFloat32)
+    source.SetSpacing(reference.GetSpacing())
+    source.SetDirection(reference.GetDirection())
+    source.SetOrigin(reference.TransformIndexToPhysicalPoint((2, 2, 2)))
+    source[0, 0, 0] = 3.25
+    source[1, 2, 3] = 7.5
+
+    def fail_if_resampled(*_args, **_kwargs):
+        raise AssertionError("integer-aligned SED placement must not interpolate")
+
+    monkeypatch.setattr("bonemechreg.post_timelapse.sitk.Resample", fail_if_resampled)
+
+    aligned = _linear_scalar_on_grid(source, reference)
+
+    assert aligned.GetSize() == reference.GetSize()
+    assert aligned.GetOrigin() == reference.GetOrigin()
+    assert aligned.GetDirection() == reference.GetDirection()
+    assert aligned[2, 2, 2] == 3.25
+    assert aligned[3, 4, 5] == 7.5
+    assert np.isclose(sitk.GetArrayFromImage(aligned).sum(), 10.75)
+
+
 def test_run_cases_builds_material_labels_from_native_baseline_segmentation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
